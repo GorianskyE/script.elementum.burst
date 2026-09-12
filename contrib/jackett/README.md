@@ -36,7 +36,10 @@ Jackett keeps the Cloudflare handling entirely on its own side: it talks to
 FlareSolverr itself, and Burst only sees a local JSON API. This also brings in
 every other indexer configured in Jackett.
 
-1. Start Jackett and FlareSolverr (`docker compose up -d`).
+1. Start Jackett and FlareSolverr (`docker compose up -d`). If a FlareSolverr
+   container is already running for something else, add only the service from
+   `docker-compose.jackett-only.yml` to that project instead of starting a
+   second headless browser.
 2. Open `http://<host>:9117`, click **Add indexer**, add **Kinozal**, and enter
    your site credentials. Set **FlareSolverr API URL** in Jackett's settings to
    `http://flaresolverr:8191` (or the host address if the two are not in the same
@@ -69,3 +72,11 @@ always enabled, so no entry appears in Burst's provider list.
   `InfoHash` mapping keeps those results usable.
 * In the Kinozal indexer settings, turning **Strip Cyrillic Letters** off keeps
   release names as they appear on the site, which reads better in Elementum.
+
+### Timeouts
+
+Jackett's **FlareSolverr Max Timeout** defaults to `55000` ms
+(`ServerConfig.cs`). A Cloudflare solve from a datacenter IP regularly takes
+longer than that, so raise it to `180000` before concluding that the challenge
+cannot be passed. The same applies to Burst's own FlareSolverr timeout: 60
+seconds is enough from a home connection, a VPS usually needs 150.
