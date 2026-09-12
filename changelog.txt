@@ -1,6 +1,11 @@
 script.elementum.burst changelog
 ===============
 
+[B]v0.0.99.1[/B] - 2026-09-12
+ - Added FlareSolverr support to pass Cloudflare challenges
+ - Fixed cookie domain matching, which silently disabled Cookie Sync
+ - Kinozal moved to the kinozal.me mirror
+
 [B]v0.0.93[/B] - 2025-04-02
  - Version 0.0.93
  - Fixed json
