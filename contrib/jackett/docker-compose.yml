@@ -1,0 +1,49 @@
+# Jackett + FlareSolverr for Burst.
+#
+# Run this on a host that shares its public IP with the machine running Kodi
+# (a NAS on the same LAN is ideal). Cloudflare binds the cf_clearance cookie to
+# the pair (public IP, User-Agent), so a solver sitting behind a different
+# egress IP produces cookies Kodi cannot use.
+#
+#   docker compose up -d
+#
+# Then open http://<host>:9117, add the "Kinozal" indexer, fill in your
+# credentials and copy the API key from the top right of the page.
+
+services:
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    container_name: flaresolverr
+    restart: unless-stopped
+    environment:
+      - LOG_LEVEL=info
+      - TZ=Europe/Berlin
+    ports:
+      - "8191:8191"
+
+  jackett:
+    image: lscr.io/linuxserver/jackett:latest
+    container_name: jackett
+    restart: unless-stopped
+    depends_on:
+      - flaresolverr
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Europe/Berlin
+      - AUTO_UPDATE=true
+    volumes:
+      - ./jackett-config:/config
+    ports:
+      - "9117:9117"
+
+# Cloudflare detects plain headless Chromium more and more often. If FlareSolverr
+# stops clearing the challenge, swap the service above for Byparr, which speaks the
+# same API on the same port and needs no configuration change anywhere else:
+#
+#   byparr:
+#     image: ghcr.io/thephaseless/byparr:latest
+#     container_name: byparr
+#     restart: unless-stopped
+#     ports:
+#       - "8191:8191"

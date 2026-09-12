@@ -1,0 +1,48 @@
+{
+  "jackett": {
+    "name": "Jackett",
+    "color": "FFF14E13",
+    "enabled": true,
+    "predefined": false,
+    "private": false,
+    "is_api": true,
+    "subpage": false,
+    "charset": "utf-8",
+    "response_charset": "utf-8",
+    "separator": "+",
+    "language": "ru",
+    "languages": "ru,en",
+
+    "base_url": "http://JACKETT_HOST:9117/api/v2.0/indexers/all/results?apikey=JACKETT_APIKEY",
+
+    "general_query": "&Query=QUERY",
+    "movie_query": "&Query=QUERY&Category[]=2000",
+    "show_query": "&Query=QUERY&Category[]=5000",
+    "season_query": "&Query=QUERY&Category[]=5000",
+    "anime_query": "&Query=QUERY&Category[]=5000,5070",
+
+    "general_keywords": "{title}",
+
+    "movie_keywords": "{title:ru:en} {year}",
+    "movie_keywords_fallback": "{title:original} {year}",
+
+    "tv_keywords": "{title:ru:en} s{season:2}e{episode:2}",
+    "tv_keywords_fallback": "{title:original} s{season:2}e{episode:2}",
+
+    "season_keywords": "{title:ru:en} s{season:2}",
+    "season_keywords_fallback": "{title:original} s{season:2}",
+
+    "anime_keywords": "{title:ru:en} s{season:2}e{episode:2}",
+    "anime_keywords_fallback": "{title:original} s{season:2}e{episode:2}",
+
+    "api_format": {
+      "results": "Results",
+      "name": "Title",
+      "torrent": "Link",
+      "info_hash": "InfoHash",
+      "size": "Size",
+      "seeds": "Seeders",
+      "peers": "Peers"
+    }
+  }
+}
