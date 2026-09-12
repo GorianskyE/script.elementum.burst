@@ -18,7 +18,7 @@ except:
     platform_can_resolve = False
 
 from elementum.provider import log, get_setting
-from time import sleep
+from time import sleep, time
 from urllib3.util import connection
 from .utils import encode_dict, translatePath, is_ipv4_address
 if PY3:
@@ -46,6 +46,22 @@ if get_setting("use_custom_user_agent", bool):
         log.debug("Using custom User Agent: %s" % (USER_AGENT))
 
 PATH_TEMP = translatePath("special://temp")
+
+# FlareSolverr defaults, used when the setting is empty.
+FLARESOLVERR_DEFAULT_URL = "http://127.0.0.1:8191/v1"
+FLARESOLVERR_DEFAULT_TIMEOUT = 60
+
+# Cloudflare marks challenge responses with this header. Older versions of the
+# interstitial do not send it, so the body is checked for known markers as well.
+CLOUDFLARE_MITIGATED_HEADER = "Cf-Mitigated"
+CLOUDFLARE_CHALLENGE_STATUSES = (403, 503)
+CLOUDFLARE_CHALLENGE_MARKERS = (
+    "challenges.cloudflare.com",
+    "cf-browser-verification",
+    "_cf_chl_opt",
+    "cf_chl_",
+    "<title>Just a moment...</title>",
+)
 
 # Custom DNS default data
 OPENNIC_API_URL = 'https://api.opennicproject.org/geoip/?bare&res=3&adm=3&rnd=true&ipv=4'
@@ -83,6 +99,13 @@ use_opennic_dns = get_setting("use_opennic_dns", bool)
 use_tor_dns = get_setting("use_tor_dns", bool)
 use_elementum_proxy = get_setting("use_elementum_proxy", bool)
 
+# FlareSolverr is used to pass Cloudflare's "Just a moment..." interstitial.
+# It is a separate service (usually a Docker container) driving a real browser,
+# that returns the cf_clearance cookie together with the User-Agent it was issued for.
+flaresolverr_enabled = get_setting("flaresolverr_enabled", bool)
+flaresolverr_url = get_setting("flaresolverr_url", unicode) or FLARESOLVERR_DEFAULT_URL
+flaresolverr_timeout = get_setting("flaresolverr_timeout", int) or FLARESOLVERR_DEFAULT_TIMEOUT
+
 def FetchOpenNICDnsServers():
     try:
         response = requests.get(OPENNIC_API_URL, timeout=5, headers={'User-Agent': USER_AGENT})
@@ -111,6 +134,10 @@ if use_opennic_dns:
 
 def MyResolver(host):
     if '.' not in host:
+        return host
+
+    # Literal addresses have nothing to resolve.
+    if is_ipv4_address(host):
         return host
 
     try:
@@ -176,6 +203,7 @@ class Client:
         self.is_api = is_api
 
         self.use_cookie_sync = False
+        self.used_flaresolverr = False
 
         self.headers = dict()
         self.request_headers = None
@@ -282,9 +310,32 @@ class Client:
                 log.debug("Reading cookies error: %s" % repr(e))
 
     def cookie_exists(self, cookie_name, domain):
+        """ Checks whether a cookie covering ``domain`` is present in the jar
+
+        Cookie domains are stored with or without a leading dot depending on where
+        they came from (Cookie Sync, FlareSolverr, the site itself), so both forms
+        have to match the same host.
+
+        Args:
+            cookie_name (str): Name of the cookie to look for
+            domain      (str): Host the cookie has to be valid for
+
+        Returns:
+            bool: True if such a cookie is present
+        """
+        domain = (domain or '').lower().lstrip('.')
+
         for cookie in self._cookies:
-            if cookie.name == cookie_name and cookie.domain in domain:
+            if cookie.name != cookie_name:
+                continue
+
+            cookie_domain = (cookie.domain or '').lower().lstrip('.')
+            if not cookie_domain:
+                continue
+
+            if domain == cookie_domain or domain.endswith('.' + cookie_domain):
                 return True
+
         return False
 
     def add_cookie(self, cookie):
@@ -312,7 +363,107 @@ class Client:
         """
         return self._cookies
 
-    def open(self, url, language='en', post_data=None, get_data=None, headers=None):
+    def is_cloudflare_challenge(self):
+        """ Detects Cloudflare's interstitial ("Just a moment...") in the last response
+
+        Returns:
+            bool: True if the last response was a Cloudflare challenge
+        """
+        if self.status not in CLOUDFLARE_CHALLENGE_STATUSES:
+            return False
+
+        try:
+            if self.headers and self.headers.get(CLOUDFLARE_MITIGATED_HEADER, '').lower() == 'challenge':
+                return True
+        except Exception:
+            pass
+
+        if not self.content:
+            return False
+
+        for marker in CLOUDFLARE_CHALLENGE_MARKERS:
+            if marker in self.content:
+                return True
+
+        return False
+
+    def solve_cloudflare_challenge(self, url):
+        """ Asks FlareSolverr to pass the Cloudflare challenge for ``url``
+
+        The cf_clearance cookie is bound to the pair (public IP, User-Agent), so the
+        User-Agent reported by FlareSolverr is adopted for all further requests.
+
+        Args:
+            url (str): The URL that returned a challenge
+
+        Returns:
+            bool: Whether or not clearance cookies were obtained
+        """
+        log.info("Solving Cloudflare challenge for %s via FlareSolverr at %s" % (repr(url), repr(flaresolverr_url)))
+
+        payload = {
+            'cmd': 'request.get',
+            'url': url,
+            'maxTimeout': flaresolverr_timeout * 1000,
+        }
+
+        try:
+            # A plain session: FlareSolverr is a local service and must not be
+            # reached through the proxy configured for the trackers.
+            solver = requests.Session()
+            solver.trust_env = False
+            with solver.post(flaresolverr_url, json=payload, timeout=flaresolverr_timeout + 15) as response:
+                data = response.json()
+        except Exception as e:
+            log.error("FlareSolverr request failed with: %s" % repr(e))
+            return False
+
+        if data.get('status') != 'ok':
+            log.error("FlareSolverr could not solve the challenge: %s" % repr(data.get('message')))
+            return False
+
+        solution = data.get('solution') or {}
+
+        user_agent = solution.get('userAgent')
+        if user_agent:
+            log.debug("Using User-Agent reported by FlareSolverr: %s" % repr(user_agent))
+            self.user_agent = user_agent
+            change_agent(user_agent)
+
+        added = 0
+        expires = int(time()) + 86400
+        for cookie in solution.get('cookies') or []:
+            if 'name' not in cookie or 'value' not in cookie:
+                continue
+
+            expiration_date = cookie.get('expires') or 0
+            if expiration_date <= 0:
+                expiration_date = expires
+
+            try:
+                self.add_cookie({
+                    'domain': cookie.get('domain') or urlparse(url).netloc,
+                    'name': cookie['name'],
+                    'value': cookie['value'],
+                    'path': cookie.get('path') or '/',
+                    'secure': bool(cookie.get('secure')),
+                    'expirationDate': int(expiration_date),
+                    'rest': {'HttpOnly': bool(cookie.get('httpOnly'))},
+                })
+                added += 1
+            except Exception as e:
+                log.debug("Could not store cookie %s: %s" % (repr(cookie.get('name')), repr(e)))
+
+        if not added:
+            log.error("FlareSolverr returned no usable cookies")
+            return False
+
+        log.info("FlareSolverr returned %d cookies" % added)
+        self.save_cookies()
+
+        return True
+
+    def open(self, url, language='en', post_data=None, get_data=None, headers=None, _retry=False):
         """ Opens a connection to a webpage and saves its HTML content in ``self.content``
 
         Args:
@@ -410,6 +561,13 @@ class Client:
             import traceback
             log.error("%s failed with %s:" % (repr(url), repr(e)))
             map(log.debug, traceback.format_exc().split("\n"))
+
+        if flaresolverr_enabled and not _retry and self.is_cloudflare_challenge():
+            log.info("Cloudflare challenge detected for %s" % repr(url))
+            if self.solve_cloudflare_challenge(url):
+                self.used_flaresolverr = True
+                # get_data is already part of url at this point, do not append it twice.
+                return self.open(url, language=language, post_data=post_data, headers=headers, _retry=True)
 
         log.debug("Status for %s : %s" % (repr(url), str(self.status)))
         if self.status != 200:

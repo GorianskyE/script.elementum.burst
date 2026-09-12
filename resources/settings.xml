@@ -30,6 +30,12 @@
     <setting label="32163" type="lsep" />
     <setting label="32164" id="use_custom_user_agent" type="bool" default="false" />
       <setting id="custom_user_agent" label="32165" type="text" default="" enable="eq(-1,true)" />
+
+    <setting label="32172" type="lsep" />
+    <setting label="32173" id="flaresolverr_enabled" type="bool" default="false" />
+      <setting id="flaresolverr_url" label="32174" type="text" default="http://127.0.0.1:8191/v1" enable="eq(-1,true)" />
+      <setting id="flaresolverr_timeout" label="32175" type="slider" option="int" range="15,5,180" default="60" enable="eq(-2,true)" />
+      <setting id="flaresolverr_help" label="32176" type="text" enable="false" subsetting="true" />
   </category>
 
 <!-- Cookie Sync -->
