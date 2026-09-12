@@ -38,7 +38,7 @@ every other indexer configured in Jackett.
 
 1. Start Jackett and FlareSolverr (`docker compose up -d`). If a FlareSolverr
    container is already running for something else, add only the service from
-   `docker-compose.jackett-only.yml` to that project instead of starting a
+   `docker-compose.override.yml` to that project instead of starting a
    second headless browser.
 2. Open `http://<host>:9117`, click **Add indexer**, add **Kinozal**, and enter
    your site credentials. Set **FlareSolverr API URL** in Jackett's settings to
