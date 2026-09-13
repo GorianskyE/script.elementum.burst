@@ -540,6 +540,39 @@ def extract_from_api(provider, client):
         results = subresults
         log.debug("[%s] with subresults: %s" % (provider, repr(results)))
 
+    # Some APIs only hand out a link to a page that carries the real torrent or
+    # magnet, the way HTML providers do. Resolving those is what keeps a tracker
+    # with a daily .torrent quota from spending it on every single result.
+    needs_subpage = 'subpage' in definition and definition['subpage']
+    threads = []
+    q = Queue()
+
+    def resolve_subpage(name, info_hash, torrent, size, seeds, peers):
+        resolved = torrent
+        try:
+            # A separate client, otherwise it is race conditions all over the place.
+            subclient = Client()
+            subclient.passkey = client.passkey
+
+            headers = {}
+            if 'subpage_mode' in definition and definition['subpage_mode'] == 'xhr':
+                headers['X-Requested-With'] = 'XMLHttpRequest'
+                headers['Content-Language'] = ''
+
+            subclient.open(py2_encode(torrent), headers=headers)
+
+            if 'bittorrent' not in subclient.headers.get('content-type', ''):
+                # A redirect to magnet: lands in content, the client catches the
+                # scheme error requests raises for it.
+                found = extract_from_page(provider, subclient.content)
+                if found:
+                    resolved = found
+        except Exception as e:
+            log.error("[%s] Subpage resolve for %s failed with: %s" % (provider, repr(torrent), repr(e)))
+
+        provider_cache[torrent] = resolved
+        q.put_nowait((name, info_hash, resolved, size, seeds, peers))
+
     for result in results:
         if not result or not isinstance(result, dict):
             continue
@@ -590,7 +623,28 @@ def extract_from_api(provider, client):
             peers = result[api_format['peers']]
             if isinstance(peers, basestring) and peers.isdigit():
                 peers = int(peers)
+
+        if needs_subpage and torrent and not torrent.startswith('magnet'):
+            # Already resolved during an earlier query of this search?
+            if torrent in provider_cache and provider_cache[torrent]:
+                yield (name, info_hash, provider_cache[torrent], size, seeds, peers)
+                continue
+
+            threads.append(Thread(target=resolve_subpage,
+                                  args=(name, info_hash, torrent, size, seeds, peers)))
+            continue
+
         yield (name, info_hash, torrent, size, seeds, peers)
+
+    if needs_subpage:
+        log.debug("[%s] Starting %d subpage threads..." % (provider, len(threads)))
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        for i in range(q.qsize()):
+            yield q.get_nowait()
 
 
 def extract_from_page(provider, content):

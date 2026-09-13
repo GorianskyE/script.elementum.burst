@@ -99,6 +99,25 @@ The Kodi device then talks to one LAN address and needs nothing installed.
 Note that Base URL override applies to every client, so links fetched through
 any other route (an SSH tunnel, for instance) will also point at the relay.
 
+### One definition per indexer, and trackers with a download quota
+
+A provider definition names one indexer, and Burst runs every provider in its
+own thread, so a slow tracker delays only itself. Give each indexer its own
+entry (the same JSON file can hold several) rather than pointing one definition
+at `all`.
+
+Some trackers cap how many .torrent files a user may download per day. Jackett
+offers those as two indexers: one serving torrent files with the user's passkey,
+one serving magnet links. The magnet variant resolves the hash lazily, so its
+search results carry only a link to Jackett's `/dl/` endpoint, which answers
+with a redirect to `magnet:`.
+
+Set `"subpage": true` on such a definition and Burst follows that link and hands
+Elementum the magnet, leaving the quota untouched - the same thing the built-in
+HTML providers do through their sub-page step. Results are cached per search, so
+each link is resolved once. Leave `subpage` off for indexers without a quota:
+resolving costs one request per result and buys nothing there.
+
 ### Timeouts
 
 Jackett's **FlareSolverr Max Timeout** defaults to `55000` ms
