@@ -1,6 +1,9 @@
 script.elementum.burst changelog
 ===============
 
+[B]v0.0.99.2[/B] - 2026-09-13
+ - Fixed a null info hash from an API provider discarding all of its results
+
 [B]v0.0.99.1[/B] - 2026-09-12
  - Added FlareSolverr support to pass Cloudflare challenges
  - Fixed cookie domain matching, which silently disabled Cookie Sync
