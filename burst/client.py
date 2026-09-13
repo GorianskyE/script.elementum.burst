@@ -85,6 +85,28 @@ elementum_proxy_types_overrides = {'socks4': 'socks4a',
 # Disable warning from urllib
 urllib3.disable_warnings()
 
+# The bundled requests (2.19.1) consults should_bypass_proxies() for a redirect
+# target even when redirects are not followed, because it fills in Response.next.
+# A magnet: URL has no hostname, and that None reaches socket.inet_aton, which
+# raises TypeError rather than the socket.error the library catches. Upstream
+# added this guard in 2.20; apply it to the bundled copy.
+_original_should_bypass_proxies = requests.utils.should_bypass_proxies
+
+
+def _should_bypass_proxies(url, no_proxy=None):
+    try:
+        if urlparse(url).hostname is None:
+            return True
+    except Exception:
+        return True
+
+    return _original_should_bypass_proxies(url, no_proxy)
+
+
+requests.utils.should_bypass_proxies = _should_bypass_proxies
+requests.sessions.should_bypass_proxies = _should_bypass_proxies
+
+
 # Kodi settings
 proxy_enabled = get_setting("proxy_enabled", bool)
 proxy_use_type = get_setting("proxy_use_type", int)

@@ -1,6 +1,11 @@
 script.elementum.burst changelog
 ===============
 
+[B]v0.0.99.7[/B] - 2026-09-13
+ - Fixed magnet links failing inside the bundled requests, which left magnet-only
+   results unusable
+ - A release found by several queries of one provider is listed once again
+
 [B]v0.0.99.6[/B] - 2026-09-13
  - Providers are no longer rewritten to their OpenNIC mirror unless custom DNS is
    enabled, which is what installs the resolver those domains need
