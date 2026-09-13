@@ -10,4 +10,4 @@ release.sh        export-ignore
 requirements.txt  export-ignore
 setup.cfg         export-ignore
 BUILD.md          export-ignore
-contrib           export-ignore
+/contrib          export-ignore

@@ -1,6 +1,9 @@
 script.elementum.burst changelog
 ===============
 
+[B]v0.0.99.4[/B] - 2026-09-13
+ - Fixed the packaged addon missing urllib3.contrib, which broke every import
+
 [B]v0.0.99.3[/B] - 2026-09-13
  - API providers can now resolve sub-pages, so magnet-serving indexers no longer
    spend a tracker's daily .torrent quota
