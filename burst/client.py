@@ -18,9 +18,9 @@ except:
     platform_can_resolve = False
 
 from elementum.provider import log, get_setting
-from time import sleep
+from time import sleep, time
 from urllib3.util import connection
-from .utils import encode_dict, translatePath
+from .utils import encode_dict, translatePath, is_ipv4_address
 if PY3:
     from http.cookiejar import LWPCookieJar
     from urllib.parse import urlparse, urlencode
@@ -35,7 +35,7 @@ from requests.packages.urllib3.util.retry import Retry
 from requests.adapters import HTTPAdapter
 from requests.cookies import create_cookie
 
-USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
+USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"
 if os.name == 'nt':
     USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
 
@@ -47,10 +47,28 @@ if get_setting("use_custom_user_agent", bool):
 
 PATH_TEMP = translatePath("special://temp")
 
+# FlareSolverr defaults, used when the setting is empty.
+FLARESOLVERR_DEFAULT_URL = "http://127.0.0.1:8191/v1"
+FLARESOLVERR_DEFAULT_TIMEOUT = 60
+
+# Cloudflare marks challenge responses with this header. Older versions of the
+# interstitial do not send it, so the body is checked for known markers as well.
+CLOUDFLARE_MITIGATED_HEADER = "Cf-Mitigated"
+CLOUDFLARE_CHALLENGE_STATUSES = (403, 503)
+CLOUDFLARE_CHALLENGE_MARKERS = (
+    "challenges.cloudflare.com",
+    "cf-browser-verification",
+    "_cf_chl_opt",
+    "cf_chl_",
+    "<title>Just a moment...</title>",
+)
+
 # Custom DNS default data
+OPENNIC_API_URL = 'https://api.opennicproject.org/geoip/?bare&res=3&adm=3&rnd=true&ipv=4'
+OPENNIC_DNS_FALLBACK = ['94.247.43.254', '152.53.15.127', '95.216.99.249']
 dns_cache = {}
 dns_public_list = ['9.9.9.9', '8.8.8.8', '8.8.4.4']
-dns_opennic_list = ['54.36.111.116', '192.3.165.37', '80.78.132.79']
+dns_opennic_list = list(OPENNIC_DNS_FALLBACK)
 # Save original DNS resolver
 _orig_create_connection = connection.create_connection
 
@@ -67,9 +85,29 @@ elementum_proxy_types_overrides = {'socks4': 'socks4a',
 # Disable warning from urllib
 urllib3.disable_warnings()
 
+# The bundled requests (2.19.1) consults should_bypass_proxies() for a redirect
+# target even when redirects are not followed, because it fills in Response.next.
+# A magnet: URL has no hostname, and that None reaches socket.inet_aton, which
+# raises TypeError rather than the socket.error the library catches. Upstream
+# added this guard in 2.20; apply it to the bundled copy.
+_original_should_bypass_proxies = requests.utils.should_bypass_proxies
+
+
+def _should_bypass_proxies(url, no_proxy=None):
+    try:
+        if urlparse(url).hostname is None:
+            return True
+    except Exception:
+        return True
+
+    return _original_should_bypass_proxies(url, no_proxy)
+
+
+requests.utils.should_bypass_proxies = _should_bypass_proxies
+requests.sessions.should_bypass_proxies = _should_bypass_proxies
+
+
 # Kodi settings
-public_dns_list = get_setting("public_dns_list", unicode)
-opennic_dns_list = get_setting("opennic_dns_list", unicode)
 proxy_enabled = get_setting("proxy_enabled", bool)
 proxy_use_type = get_setting("proxy_use_type", int)
 proxy_host = get_setting("proxy_host", unicode)
@@ -77,12 +115,56 @@ proxy_port = get_setting("proxy_port", int)
 proxy_login = get_setting("proxy_login", unicode)
 proxy_password = get_setting("proxy_password", unicode)
 proxy_type = get_setting("proxy_type", int)
-use_public_dns = get_setting("use_public_dns", bool)
+use_custom_dns = get_setting("use_custom_dns", bool)
+public_dns_list = get_setting("public_dns_list", unicode)
+use_opennic_dns = get_setting("use_opennic_dns", bool)
 use_tor_dns = get_setting("use_tor_dns", bool)
 use_elementum_proxy = get_setting("use_elementum_proxy", bool)
 
+# The OpenNIC mirrors of some trackers live under alternative TLDs such as .lib,
+# which only resolve through OpenNIC's own name servers. Those are installed only
+# when custom DNS is on and a resolver is available on this platform.
+custom_dns_active = use_custom_dns and platform_can_resolve
+
+# FlareSolverr is used to pass Cloudflare's "Just a moment..." interstitial.
+# It is a separate service (usually a Docker container) driving a real browser,
+# that returns the cf_clearance cookie together with the User-Agent it was issued for.
+flaresolverr_enabled = get_setting("flaresolverr_enabled", bool)
+flaresolverr_url = get_setting("flaresolverr_url", unicode) or FLARESOLVERR_DEFAULT_URL
+flaresolverr_timeout = get_setting("flaresolverr_timeout", int) or FLARESOLVERR_DEFAULT_TIMEOUT
+
+def FetchOpenNICDnsServers():
+    try:
+        response = requests.get(OPENNIC_API_URL, timeout=5, headers={'User-Agent': USER_AGENT})
+        response.raise_for_status()
+        dns_servers = []
+        for line in response.text.splitlines():
+            candidate = line.strip()
+            if not candidate or not is_ipv4_address(candidate):
+                continue
+            if candidate in dns_servers:
+                continue
+            dns_servers.append(candidate)
+
+        if dns_servers:
+            log.debug("Loaded %d OpenNIC DNS servers from API" % len(dns_servers))
+            return dns_servers
+        log.debug("OpenNIC API returned no valid IPv4 DNS servers, using fallback list")
+    except Exception as e:
+        log.debug("Failed to fetch OpenNIC DNS servers from API: %s" % repr(e))
+    return list(OPENNIC_DNS_FALLBACK)
+
+
+if use_opennic_dns:
+    dns_opennic_list = FetchOpenNICDnsServers()
+
+
 def MyResolver(host):
     if '.' not in host:
+        return host
+
+    # Literal addresses have nothing to resolve.
+    if is_ipv4_address(host):
         return host
 
     try:
@@ -91,7 +173,7 @@ def MyResolver(host):
         pass
 
     ip = ResolvePublic(host)
-    if not ip:
+    if not ip and use_opennic_dns:
         ip = ResolveOpennic(host)
 
     if ip:
@@ -121,6 +203,7 @@ def ResolveOpennic(host):
     except:
         return
 
+
 class Client:
     """
     Web client class with automatic charset detection and decoding
@@ -147,6 +230,7 @@ class Client:
         self.is_api = is_api
 
         self.use_cookie_sync = False
+        self.used_flaresolverr = False
 
         self.headers = dict()
         self.request_headers = None
@@ -171,9 +255,7 @@ class Client:
         # self.session = self.scraper.session()
 
         global dns_public_list
-        global dns_opennic_list
         dns_public_list = public_dns_list.replace(" ", "").split(",")
-        dns_opennic_list = opennic_dns_list.replace(" ", "").split(",")
         # socket.setdefaulttimeout(60)
 
         # Parsing proxy information
@@ -192,7 +274,7 @@ class Client:
         except:
             pass
 
-        if use_public_dns and platform_can_resolve:
+        if use_custom_dns and platform_can_resolve:
             connection.create_connection = patched_create_connection
 
         if use_elementum_proxy:
@@ -255,9 +337,32 @@ class Client:
                 log.debug("Reading cookies error: %s" % repr(e))
 
     def cookie_exists(self, cookie_name, domain):
+        """ Checks whether a cookie covering ``domain`` is present in the jar
+
+        Cookie domains are stored with or without a leading dot depending on where
+        they came from (Cookie Sync, FlareSolverr, the site itself), so both forms
+        have to match the same host.
+
+        Args:
+            cookie_name (str): Name of the cookie to look for
+            domain      (str): Host the cookie has to be valid for
+
+        Returns:
+            bool: True if such a cookie is present
+        """
+        domain = (domain or '').lower().lstrip('.')
+
         for cookie in self._cookies:
-            if cookie.name == cookie_name and cookie.domain in domain:
+            if cookie.name != cookie_name:
+                continue
+
+            cookie_domain = (cookie.domain or '').lower().lstrip('.')
+            if not cookie_domain:
+                continue
+
+            if domain == cookie_domain or domain.endswith('.' + cookie_domain):
                 return True
+
         return False
 
     def add_cookie(self, cookie):
@@ -285,7 +390,107 @@ class Client:
         """
         return self._cookies
 
-    def open(self, url, language='en', post_data=None, get_data=None, headers=None):
+    def is_cloudflare_challenge(self):
+        """ Detects Cloudflare's interstitial ("Just a moment...") in the last response
+
+        Returns:
+            bool: True if the last response was a Cloudflare challenge
+        """
+        if self.status not in CLOUDFLARE_CHALLENGE_STATUSES:
+            return False
+
+        try:
+            if self.headers and self.headers.get(CLOUDFLARE_MITIGATED_HEADER, '').lower() == 'challenge':
+                return True
+        except Exception:
+            pass
+
+        if not self.content:
+            return False
+
+        for marker in CLOUDFLARE_CHALLENGE_MARKERS:
+            if marker in self.content:
+                return True
+
+        return False
+
+    def solve_cloudflare_challenge(self, url):
+        """ Asks FlareSolverr to pass the Cloudflare challenge for ``url``
+
+        The cf_clearance cookie is bound to the pair (public IP, User-Agent), so the
+        User-Agent reported by FlareSolverr is adopted for all further requests.
+
+        Args:
+            url (str): The URL that returned a challenge
+
+        Returns:
+            bool: Whether or not clearance cookies were obtained
+        """
+        log.info("Solving Cloudflare challenge for %s via FlareSolverr at %s" % (repr(url), repr(flaresolverr_url)))
+
+        payload = {
+            'cmd': 'request.get',
+            'url': url,
+            'maxTimeout': flaresolverr_timeout * 1000,
+        }
+
+        try:
+            # A plain session: FlareSolverr is a local service and must not be
+            # reached through the proxy configured for the trackers.
+            solver = requests.Session()
+            solver.trust_env = False
+            with solver.post(flaresolverr_url, json=payload, timeout=flaresolverr_timeout + 15) as response:
+                data = response.json()
+        except Exception as e:
+            log.error("FlareSolverr request failed with: %s" % repr(e))
+            return False
+
+        if data.get('status') != 'ok':
+            log.error("FlareSolverr could not solve the challenge: %s" % repr(data.get('message')))
+            return False
+
+        solution = data.get('solution') or {}
+
+        user_agent = solution.get('userAgent')
+        if user_agent:
+            log.debug("Using User-Agent reported by FlareSolverr: %s" % repr(user_agent))
+            self.user_agent = user_agent
+            change_agent(user_agent)
+
+        added = 0
+        expires = int(time()) + 86400
+        for cookie in solution.get('cookies') or []:
+            if 'name' not in cookie or 'value' not in cookie:
+                continue
+
+            expiration_date = cookie.get('expires') or 0
+            if expiration_date <= 0:
+                expiration_date = expires
+
+            try:
+                self.add_cookie({
+                    'domain': cookie.get('domain') or urlparse(url).netloc,
+                    'name': cookie['name'],
+                    'value': cookie['value'],
+                    'path': cookie.get('path') or '/',
+                    'secure': bool(cookie.get('secure')),
+                    'expirationDate': int(expiration_date),
+                    'rest': {'HttpOnly': bool(cookie.get('httpOnly'))},
+                })
+                added += 1
+            except Exception as e:
+                log.debug("Could not store cookie %s: %s" % (repr(cookie.get('name')), repr(e)))
+
+        if not added:
+            log.error("FlareSolverr returned no usable cookies")
+            return False
+
+        log.info("FlareSolverr returned %d cookies" % added)
+        self.save_cookies()
+
+        return True
+
+    def open(self, url, language='en', post_data=None, get_data=None, headers=None, allow_redirects=True, _retry=False):
         """ Opens a connection to a webpage and saves its HTML content in ``self.content``
 
         Args:
@@ -293,6 +498,8 @@ class Client:
             language   (str): The language code for the ``Content-Language`` header
             post_data (dict): POST data for the request
             get_data  (dict): GET data for the request
+            allow_redirects (bool): Whether to follow redirects. Turn it off when the
+                target may redirect to a scheme requests cannot prepare, such as magnet:
         """
 
         if get_data:
@@ -357,7 +564,7 @@ class Client:
 
         try:
             self._good_spider()
-            with self.session.send(prepped) as response:
+            with self.session.send(prepped, allow_redirects=allow_redirects) as response:
                 self.headers = response.headers
                 self.status = response.status_code
                 self.url = response.url
@@ -384,7 +591,16 @@ class Client:
             log.error("%s failed with %s:" % (repr(url), repr(e)))
             map(log.debug, traceback.format_exc().split("\n"))
 
+        if flaresolverr_enabled and not _retry and self.is_cloudflare_challenge():
+            log.info("Cloudflare challenge detected for %s" % repr(url))
+            if self.solve_cloudflare_challenge(url):
+                self.used_flaresolverr = True
+                # get_data is already part of url at this point, do not append it twice.
+                return self.open(url, language=language, post_data=post_data, headers=headers, allow_redirects=allow_redirects, _retry=True)
+
         log.debug("Status for %s : %s" % (repr(url), str(self.status)))
+        if self.status != 200:
+            log.debug("Failed response content for %s : %s" % (repr(url), str(self.content)))
 
         return self.status == 200
 

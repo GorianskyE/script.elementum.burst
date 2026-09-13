@@ -1,6 +1,43 @@
 script.elementum.burst changelog
 ===============
 
+[B]v0.0.99.9[/B] - 2026-09-13
+ - A provider definition can name its icon, so custom providers are no longer
+   limited to one named after the provider id
+ - Added the Jackett icon
+
+[B]v0.0.99.8[/B] - 2026-09-13
+ - Repackaged: 0.0.99.7 shipped with an empty addon.xml and could not be installed
+
+[B]v0.0.99.7[/B] - 2026-09-13
+ - Fixed magnet links failing inside the bundled requests, which left magnet-only
+   results unusable
+ - A release found by several queries of one provider is listed once again
+
+[B]v0.0.99.6[/B] - 2026-09-13
+ - Providers are no longer rewritten to their OpenNIC mirror unless custom DNS is
+   enabled, which is what installs the resolver those domains need
+
+[B]v0.0.99.5[/B] - 2026-09-13
+ - Sub-page resolving now reads magnet: redirects from the Location header, so a
+   result that redirects to a magnet no longer fails inside the HTTP client
+ - Sub-pages of one provider are resolved at most 10 at a time
+
+[B]v0.0.99.4[/B] - 2026-09-13
+ - Fixed the packaged addon missing urllib3.contrib, which broke every import
+
+[B]v0.0.99.3[/B] - 2026-09-13
+ - API providers can now resolve sub-pages, so magnet-serving indexers no longer
+   spend a tracker's daily .torrent quota
+
+[B]v0.0.99.2[/B] - 2026-09-13
+ - Fixed a null info hash from an API provider discarding all of its results
+
+[B]v0.0.99.1[/B] - 2026-09-12
+ - Added FlareSolverr support to pass Cloudflare challenges
+ - Fixed cookie domain matching, which silently disabled Cookie Sync
+ - Kinozal moved to the kinozal.me mirror
+
 [B]v0.0.93[/B] - 2025-04-02
  - Version 0.0.93
  - Fixed json
@@ -246,7 +283,7 @@ script.elementum.burst changelog
  - Update GloTorrents url (#310)
  - Cleanup results before adding to the result list (#303)
  - Update strings.po (#302)
- - Updated default Opennic DNS IPs.
+ - Updated default OpenNIC DNS IPs.
 
 [B]v0.0.70[/B] - 2021-07-06
  - version 0.0.70.

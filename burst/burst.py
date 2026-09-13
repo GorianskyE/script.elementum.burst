@@ -44,6 +44,9 @@ from .filtering import apply_filters, Filtering, cleanup_results
 from .client import USER_AGENT, Client, change_agent
 from .utils import ADDON_ICON, notify, translation, sizeof, get_icon_path, get_enabled_providers, get_alias, size_int
 
+# How many sub-pages of one provider are resolved at the same time.
+SUBPAGE_CONCURRENCY = 10
+
 provider_names = []
 provider_results = []
 provider_cache = {}
@@ -540,6 +543,47 @@ def extract_from_api(provider, client):
         results = subresults
         log.debug("[%s] with subresults: %s" % (provider, repr(results)))
 
+    # Some APIs only hand out a link to a page that carries the real torrent or
+    # magnet, the way HTML providers do. Resolving those is what keeps a tracker
+    # with a daily .torrent quota from spending it on every single result.
+    needs_subpage = 'subpage' in definition and definition['subpage']
+    threads = []
+    q = Queue()
+
+    def resolve_subpage(name, info_hash, torrent, size, seeds, peers):
+        resolved = torrent
+        try:
+            # A separate client, otherwise it is race conditions all over the place.
+            subclient = Client()
+            subclient.passkey = client.passkey
+
+            headers = {}
+            if 'subpage_mode' in definition and definition['subpage_mode'] == 'xhr':
+                headers['X-Requested-With'] = 'XMLHttpRequest'
+                headers['Content-Language'] = ''
+
+            # Redirects are followed by hand: the target is often a magnet: link,
+            # and letting requests prepare a redirect to it blows up while it
+            # rebuilds proxies, because such a URL has no hostname.
+            subclient.open(py2_encode(torrent), headers=headers, allow_redirects=False)
+
+            location = subclient.headers.get('location', '')
+            if location.startswith('magnet:'):
+                resolved = location
+            elif location.startswith('http'):
+                subclient.open(py2_encode(location), headers=headers)
+                resolved = location
+
+            if resolved == torrent and 'bittorrent' not in subclient.headers.get('content-type', ''):
+                found = extract_from_page(provider, subclient.content)
+                if found:
+                    resolved = found
+        except Exception as e:
+            log.error("[%s] Subpage resolve for %s failed with: %s" % (provider, repr(torrent), repr(e)))
+
+        provider_cache[torrent] = resolved
+        q.put_nowait((name, info_hash, resolved, size, seeds, peers))
+
     for result in results:
         if not result or not isinstance(result, dict):
             continue
@@ -562,7 +606,7 @@ def extract_from_api(provider, client):
                 name += ' '
             name += get_nested_value(result, api_format['description'], "")
         if 'torrent' in api_format:
-            torrent = result[api_format['torrent']]
+            torrent = result[api_format['torrent']] or ''
             if 'download_path' in definition:
                 torrent = definition['download_path'] + torrent
             if client.token:
@@ -572,7 +616,8 @@ def extract_from_api(provider, client):
                 torrent = append_headers(torrent, headers)
                 log.debug("[%s] Torrent with headers: %s" % (provider, repr(torrent)))
         if 'info_hash' in api_format:
-            info_hash = result[api_format['info_hash']]
+            # APIs report a missing hash as null, keep the empty-string contract.
+            info_hash = result[api_format['info_hash']] or ''
         if 'quality' in api_format:  # Again quite specific to YTS and AniLibria
             name = "%s - %s" % (name, get_nested_value(result, api_format['quality'], ""))
         if 'size' in api_format:
@@ -589,7 +634,30 @@ def extract_from_api(provider, client):
             peers = result[api_format['peers']]
             if isinstance(peers, basestring) and peers.isdigit():
                 peers = int(peers)
+
+        if needs_subpage and torrent and not torrent.startswith('magnet'):
+            # Already resolved during an earlier query of this search?
+            if torrent in provider_cache and provider_cache[torrent]:
+                yield (name, info_hash, provider_cache[torrent], size, seeds, peers)
+                continue
+
+            threads.append(Thread(target=resolve_subpage,
+                                  args=(name, info_hash, torrent, size, seeds, peers)))
+            continue
+
         yield (name, info_hash, torrent, size, seeds, peers)
+
+    if needs_subpage:
+        log.debug("[%s] Resolving %d subpages, %d at a time..." % (provider, len(threads), SUBPAGE_CONCURRENCY))
+        for batch in range(0, len(threads), SUBPAGE_CONCURRENCY):
+            chunk = threads[batch:batch + SUBPAGE_CONCURRENCY]
+            for t in chunk:
+                t.start()
+            for t in chunk:
+                t.join()
+
+        for i in range(q.qsize()):
+            yield q.get_nowait()
 
 
 def extract_from_page(provider, content):
