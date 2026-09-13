@@ -1,6 +1,10 @@
 script.elementum.burst changelog
 ===============
 
+[B]v0.0.99.3[/B] - 2026-09-13
+ - API providers can now resolve sub-pages, so magnet-serving indexers no longer
+   spend a tracker's daily .torrent quota
+
 [B]v0.0.99.2[/B] - 2026-09-13
  - Fixed a null info hash from an API provider discarding all of its results
 
