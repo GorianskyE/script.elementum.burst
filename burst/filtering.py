@@ -793,7 +793,7 @@ def cleanup_results(results_list):
             log.debug('[%s] Skipping due to empty uri: %s' % (result['provider'][16:-8], repr(result)))
             continue
 
-        hash_ = result['info_hash'].upper()
+        hash_ = (result['info_hash'] or '').upper()
 
         if not hash_:
             try:

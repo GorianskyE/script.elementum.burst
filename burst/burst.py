@@ -562,7 +562,7 @@ def extract_from_api(provider, client):
                 name += ' '
             name += get_nested_value(result, api_format['description'], "")
         if 'torrent' in api_format:
-            torrent = result[api_format['torrent']]
+            torrent = result[api_format['torrent']] or ''
             if 'download_path' in definition:
                 torrent = definition['download_path'] + torrent
             if client.token:
@@ -572,7 +572,8 @@ def extract_from_api(provider, client):
                 torrent = append_headers(torrent, headers)
                 log.debug("[%s] Torrent with headers: %s" % (provider, repr(torrent)))
         if 'info_hash' in api_format:
-            info_hash = result[api_format['info_hash']]
+            # APIs report a missing hash as null, keep the empty-string contract.
+            info_hash = result[api_format['info_hash']] or ''
         if 'quality' in api_format:  # Again quite specific to YTS and AniLibria
             name = "%s - %s" % (name, get_nested_value(result, api_format['quality'], ""))
         if 'size' in api_format:
