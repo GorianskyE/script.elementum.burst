@@ -42,6 +42,11 @@ def generate_payload(provider, generator, filtering, verify_name=True, verify_si
     definition = definitions[provider]
     definition = get_alias(definition, get_setting("%s_alias" % provider))
 
+    # Custom providers are free to name themselves anything, so let a definition
+    # point at an icon that ships with the addon instead of one named after it.
+    icon_name = definition['icon'] if 'icon' in definition and definition['icon'] else provider
+    icon_path = os.path.join(ADDON_PATH, 'burst', 'providers', 'icons', '%s.png' % icon_name)
+
     for name, info_hash, uri, size, seeds, peers in generator:
         size = clean_size(size)
         # uri, info_hash = clean_magnet(uri, info_hash)
@@ -61,7 +66,7 @@ def generate_payload(provider, generator, filtering, verify_name=True, verify_si
                 "peers": get_int(peers),
                 "language": definition["language"] if 'language' in definition else 'en',
                 "provider": '[COLOR %s]%s[/COLOR]' % (definition['color'], definition['name']),
-                "icon": os.path.join(ADDON_PATH, 'burst', 'providers', 'icons', '%s.png' % provider),
+                "icon": icon_path,
                 "sort_resolution": sort_resolution,
                 "sort_balance": sort_balance
             })

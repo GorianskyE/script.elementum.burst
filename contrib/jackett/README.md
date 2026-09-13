@@ -118,6 +118,13 @@ HTML providers do through their sub-page step. Results are cached per search, so
 each link is resolved once. Leave `subpage` off for indexers without a quota:
 resolving costs one request per result and buys nothing there.
 
+### Icons
+
+A provider definition may name the icon it wants with an `icon` key, so several
+definitions can share one file instead of needing one named after each provider
+id. `jackett` ships with the addon; anything else has to be added to
+`burst/providers/icons/` as a 256x256 PNG.
+
 ### Timeouts
 
 Jackett's **FlareSolverr Max Timeout** defaults to `55000` ms

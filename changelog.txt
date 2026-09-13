@@ -1,6 +1,11 @@
 script.elementum.burst changelog
 ===============
 
+[B]v0.0.99.9[/B] - 2026-09-13
+ - A provider definition can name its icon, so custom providers are no longer
+   limited to one named after the provider id
+ - Added the Jackett icon
+
 [B]v0.0.99.8[/B] - 2026-09-13
  - Repackaged: 0.0.99.7 shipped with an empty addon.xml and could not be installed
 
