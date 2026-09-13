@@ -382,6 +382,6 @@ def is_ipv4_address(string_ip):
     """
     try:
         socket.inet_aton(string_ip)
-    except socket.error:
+    except (socket.error, TypeError):
         return False
     return True

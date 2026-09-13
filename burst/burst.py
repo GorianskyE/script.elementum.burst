@@ -44,6 +44,9 @@ from .filtering import apply_filters, Filtering, cleanup_results
 from .client import USER_AGENT, Client, change_agent
 from .utils import ADDON_ICON, notify, translation, sizeof, get_icon_path, get_enabled_providers, get_alias, size_int
 
+# How many sub-pages of one provider are resolved at the same time.
+SUBPAGE_CONCURRENCY = 10
+
 provider_names = []
 provider_results = []
 provider_cache = {}
@@ -559,11 +562,19 @@ def extract_from_api(provider, client):
                 headers['X-Requested-With'] = 'XMLHttpRequest'
                 headers['Content-Language'] = ''
 
-            subclient.open(py2_encode(torrent), headers=headers)
+            # Redirects are followed by hand: the target is often a magnet: link,
+            # and letting requests prepare a redirect to it blows up while it
+            # rebuilds proxies, because such a URL has no hostname.
+            subclient.open(py2_encode(torrent), headers=headers, allow_redirects=False)
 
-            if 'bittorrent' not in subclient.headers.get('content-type', ''):
-                # A redirect to magnet: lands in content, the client catches the
-                # scheme error requests raises for it.
+            location = subclient.headers.get('location', '')
+            if location.startswith('magnet:'):
+                resolved = location
+            elif location.startswith('http'):
+                subclient.open(py2_encode(location), headers=headers)
+                resolved = location
+
+            if resolved == torrent and 'bittorrent' not in subclient.headers.get('content-type', ''):
                 found = extract_from_page(provider, subclient.content)
                 if found:
                     resolved = found
@@ -637,11 +648,13 @@ def extract_from_api(provider, client):
         yield (name, info_hash, torrent, size, seeds, peers)
 
     if needs_subpage:
-        log.debug("[%s] Starting %d subpage threads..." % (provider, len(threads)))
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
+        log.debug("[%s] Resolving %d subpages, %d at a time..." % (provider, len(threads), SUBPAGE_CONCURRENCY))
+        for batch in range(0, len(threads), SUBPAGE_CONCURRENCY):
+            chunk = threads[batch:batch + SUBPAGE_CONCURRENCY]
+            for t in chunk:
+                t.start()
+            for t in chunk:
+                t.join()
 
         for i in range(q.qsize()):
             yield q.get_nowait()

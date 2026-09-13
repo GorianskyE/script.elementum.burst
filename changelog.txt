@@ -1,6 +1,11 @@
 script.elementum.burst changelog
 ===============
 
+[B]v0.0.99.5[/B] - 2026-09-13
+ - Sub-page resolving now reads magnet: redirects from the Location header, so a
+   result that redirects to a magnet no longer fails inside the HTTP client
+ - Sub-pages of one provider are resolved at most 10 at a time
+
 [B]v0.0.99.4[/B] - 2026-09-13
  - Fixed the packaged addon missing urllib3.contrib, which broke every import
 

@@ -463,7 +463,7 @@ class Client:
 
         return True
 
-    def open(self, url, language='en', post_data=None, get_data=None, headers=None, _retry=False):
+    def open(self, url, language='en', post_data=None, get_data=None, headers=None, allow_redirects=True, _retry=False):
         """ Opens a connection to a webpage and saves its HTML content in ``self.content``
 
         Args:
@@ -471,6 +471,8 @@ class Client:
             language   (str): The language code for the ``Content-Language`` header
             post_data (dict): POST data for the request
             get_data  (dict): GET data for the request
+            allow_redirects (bool): Whether to follow redirects. Turn it off when the
+                target may redirect to a scheme requests cannot prepare, such as magnet:
         """
 
         if get_data:
@@ -535,7 +537,7 @@ class Client:
 
         try:
             self._good_spider()
-            with self.session.send(prepped) as response:
+            with self.session.send(prepped, allow_redirects=allow_redirects) as response:
                 self.headers = response.headers
                 self.status = response.status_code
                 self.url = response.url
@@ -567,7 +569,7 @@ class Client:
             if self.solve_cloudflare_challenge(url):
                 self.used_flaresolverr = True
                 # get_data is already part of url at this point, do not append it twice.
-                return self.open(url, language=language, post_data=post_data, headers=headers, _retry=True)
+                return self.open(url, language=language, post_data=post_data, headers=headers, allow_redirects=allow_redirects, _retry=True)
 
         log.debug("Status for %s : %s" % (repr(url), str(self.status)))
         if self.status != 200:
