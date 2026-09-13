@@ -62,8 +62,14 @@ always enabled, so no entry appears in Burst's provider list.
 
 ### Notes on the definition
 
-* `indexers/all/results` searches every configured indexer. Replace `all` with
-  `kinozal` to search only Kinozal.
+* `JACKETT_INDEXER` is the id of a single indexer, for example `kinozal`.
+  `all` also works, but **it waits for the slowest indexer in the instance**:
+  measured on one instance, Kinozal answered in 287 ms while RuTracker took
+  40 445 ms, and `all` therefore took 40.6 s - far past the point where
+  Elementum gives up on a provider ("Provider ... was too slow. Ignored.").
+  Name one indexer per provider definition, and only use `all` when every
+  configured indexer is fast. There is also no point in routing a tracker
+  through Jackett when Burst already has a native provider for it.
 * Sizes arrive as a byte count and seeders/leechers as integers, so no parsing
   hints are needed; Jackett already subtracts seeders from `Peers`.
 * `Category[]` is the exact query key Jackett parses (`ResultsController.cs`),
@@ -72,6 +78,26 @@ always enabled, so no entry appears in Burst's provider list.
   `InfoHash` mapping keeps those results usable.
 * In the Kinozal indexer settings, turning **Strip Cyrillic Letters** off keeps
   release names as they appear on the site, which reads better in Elementum.
+
+### Reaching Jackett without a VPN client on the Kodi device
+
+Kodi has to reach Jackett's HTTP port, and a Kodi provider addon - this one or
+any other - cannot change that. When Jackett runs on a VPS and the Kodi device
+must stay free of VPN clients, put a relay on a machine that is already on both
+networks, typically a NAS:
+
+1. On the NAS, forward a LAN port to the Jackett address. On DSM 7 this is
+   Control Panel -> Login Portal -> Advanced -> Reverse Proxy: source
+   `HTTP / * / 9117`, destination `HTTP / <jackett-address> / 9117`.
+2. In Jackett, set **Base URL override** to `http://<nas-lan-address>:9117`.
+   `ServerService.GetServerUrl()` checks that setting before falling back to the
+   request's Host header, so every `.torrent` link Jackett hands out points at
+   the relay rather than at an address the Kodi device cannot resolve.
+3. Point `base_url` in the provider definition at the NAS address too.
+
+The Kodi device then talks to one LAN address and needs nothing installed.
+Note that Base URL override applies to every client, so links fetched through
+any other route (an SSH tunnel, for instance) will also point at the relay.
 
 ### Timeouts
 

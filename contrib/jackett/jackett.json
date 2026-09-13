@@ -13,7 +13,7 @@
     "language": "ru",
     "languages": "ru,en",
 
-    "base_url": "http://JACKETT_HOST:9117/api/v2.0/indexers/all/results?apikey=JACKETT_APIKEY",
+    "base_url": "http://JACKETT_HOST:9117/api/v2.0/indexers/JACKETT_INDEXER/results?apikey=JACKETT_APIKEY",
 
     "general_query": "&Query=QUERY",
     "movie_query": "&Query=QUERY&Category[]=2000",
