@@ -1,6 +1,10 @@
 script.elementum.burst changelog
 ===============
 
+[B]v0.0.99.6[/B] - 2026-09-13
+ - Providers are no longer rewritten to their OpenNIC mirror unless custom DNS is
+   enabled, which is what installs the resolver those domains need
+
 [B]v0.0.99.5[/B] - 2026-09-13
  - Sub-page resolving now reads magnet: redirects from the Location header, so a
    result that redirects to a magnet no longer fails inside the HTTP client

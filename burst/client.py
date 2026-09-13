@@ -99,6 +99,11 @@ use_opennic_dns = get_setting("use_opennic_dns", bool)
 use_tor_dns = get_setting("use_tor_dns", bool)
 use_elementum_proxy = get_setting("use_elementum_proxy", bool)
 
+# The OpenNIC mirrors of some trackers live under alternative TLDs such as .lib,
+# which only resolve through OpenNIC's own name servers. Those are installed only
+# when custom DNS is on and a resolver is available on this platform.
+custom_dns_active = use_custom_dns and platform_can_resolve
+
 # FlareSolverr is used to pass Cloudflare's "Just a moment..." interstitial.
 # It is a separate service (usually a Docker container) driving a real browser,
 # that returns the cf_clearance cookie together with the User-Agent it was issued for.

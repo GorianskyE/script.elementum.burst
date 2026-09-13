@@ -13,6 +13,7 @@ from elementum.provider import log, get_setting
 from .normalize import normalize_string, remove_accents
 from .providers.definitions import definitions
 from .utils import Magnet, get_int, get_float, clean_number, size_int, get_alias
+from .client import custom_dns_active
 if PY3:
     import html
     unicode = str
@@ -175,7 +176,7 @@ class Filtering:
         # Domain name preferred order:
         # root_url -> base_url (see update_definitions()) -> opennic_dns_alias OR tor_dns_alias -> user defined alias
         definition = definitions[provider]
-        if get_setting("use_opennic_dns", bool) and "opennic_dns_alias" in definition:
+        if custom_dns_active and get_setting("use_opennic_dns", bool) and "opennic_dns_alias" in definition:
             definition = get_alias(definition, definition["opennic_dns_alias"])
         if get_setting("use_tor_dns", bool) and "tor_dns_alias" in definition:
             definition = get_alias(definition, definition["tor_dns_alias"])
@@ -198,7 +199,7 @@ class Filtering:
         # Domain name preferred order:
         # root_url -> base_url (see update_definitions()) -> opennic_dns_alias OR tor_dns_alias -> user defined alias
         definition = definitions[provider]
-        if get_setting("use_opennic_dns", bool) and "opennic_dns_alias" in definition:
+        if custom_dns_active and get_setting("use_opennic_dns", bool) and "opennic_dns_alias" in definition:
             definition = get_alias(definition, definition["opennic_dns_alias"])
         if get_setting("use_tor_dns", bool) and "tor_dns_alias" in definition:
             definition = get_alias(definition, definition["tor_dns_alias"])
@@ -225,7 +226,7 @@ class Filtering:
         # Domain name preferred order:
         # root_url -> base_url (see update_definitions()) -> opennic_dns_alias OR tor_dns_alias -> user defined alias
         definition = definitions[provider]
-        if get_setting("use_opennic_dns", bool) and "opennic_dns_alias" in definition:
+        if custom_dns_active and get_setting("use_opennic_dns", bool) and "opennic_dns_alias" in definition:
             definition = get_alias(definition, definition["opennic_dns_alias"])
         if get_setting("use_tor_dns", bool) and "tor_dns_alias" in definition:
             definition = get_alias(definition, definition["tor_dns_alias"])
@@ -252,7 +253,7 @@ class Filtering:
         # Domain name preferred order:
         # root_url -> base_url (see update_definitions()) -> opennic_dns_alias OR tor_dns_alias -> user defined alias
         definition = definitions[provider]
-        if get_setting("use_opennic_dns", bool) and "opennic_dns_alias" in definition:
+        if custom_dns_active and get_setting("use_opennic_dns", bool) and "opennic_dns_alias" in definition:
             definition = get_alias(definition, definition["opennic_dns_alias"])
         if get_setting("use_tor_dns", bool) and "tor_dns_alias" in definition:
             definition = get_alias(definition, definition["tor_dns_alias"])
@@ -279,7 +280,7 @@ class Filtering:
         definition = definitions[provider]
         # Domain name preferred order:
         # root_url -> base_url (see update_definitions()) -> opennic_dns_alias OR tor_dns_alias -> user defined alias
-        if get_setting("use_opennic_dns", bool) and "opennic_dns_alias" in definition:
+        if custom_dns_active and get_setting("use_opennic_dns", bool) and "opennic_dns_alias" in definition:
             definition = get_alias(definition, definition["opennic_dns_alias"])
         if get_setting("use_tor_dns", bool) and "tor_dns_alias" in definition:
             definition = get_alias(definition, definition["tor_dns_alias"])
