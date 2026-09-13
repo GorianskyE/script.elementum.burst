@@ -125,6 +125,16 @@ definitions can share one file instead of needing one named after each provider
 id. `jackett` ships with the addon; anything else has to be added to
 `burst/providers/icons/` as a 256x256 PNG.
 
+### Season and episode have to be upper case
+
+`ApiSearch.ToTorznabQuery()` pulls the season and episode out of the query with
+`Regex.Match(queryStr, @"S(\d{2,4})E(\d{2,4}[A-Za-z]?)$")`, and that match is
+case sensitive. Written in lower case the pair stays part of the search term, and
+what happens then is up to the indexer: measured on one instance, a lower-case
+`s01e01` left RuTracker with 0 results where the upper-case form returned 49,
+while Kinozal and NoNaMe Club normalise it themselves and are unaffected. Keep
+`S{season:2}E{episode:2}` upper case in the keyword templates.
+
 ### Timeouts
 
 Jackett's **FlareSolverr Max Timeout** defaults to `55000` ms
