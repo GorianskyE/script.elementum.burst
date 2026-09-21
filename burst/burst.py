@@ -78,12 +78,18 @@ if elementum_addon:
         elementum_timeout = 30
     log.info("Using timeout from Elementum: %d seconds" % (elementum_timeout))
 
+# Elementum starts its clock when it calls the addon, and by the time this module
+# is running, Kodi has already spent seconds starting the interpreter. Leave room
+# for that and for handing the results back, or the answer arrives after Elementum
+# has stopped listening and everything found is thrown away.
+ELEMENTUM_MARGIN = 8
+
 # Make sure timeout is always less than the one from Elementum.
 if auto_timeout:
-    timeout = elementum_timeout - 3
-elif elementum_timeout > 0 and timeout > elementum_timeout - 3:
-    log.info("Redefining timeout to be less than Elementum's: %d to %d seconds" % (timeout, elementum_timeout - 3))
-    timeout = elementum_timeout - 3
+    timeout = elementum_timeout - ELEMENTUM_MARGIN
+elif elementum_timeout > 0 and timeout > elementum_timeout - ELEMENTUM_MARGIN:
+    log.info("Redefining timeout to be less than Elementum's: %d to %d seconds" % (timeout, elementum_timeout - ELEMENTUM_MARGIN))
+    timeout = elementum_timeout - ELEMENTUM_MARGIN
 
 def search(payload, method="general"):
     """ Main search entrypoint
@@ -179,19 +185,17 @@ def search(payload, method="general"):
     if 'titles' in payload:
         log.debug("Translated titles from Elementum: %s" % (repr(payload['titles'])))
 
-    providers_time = time.time()
-
     for provider in providers:
         available_providers += 1
         provider_names.append(definitions[provider]['name'])
-        task = Thread(target=run_provider, args=(provider, payload, method, providers_time, timeout))
+        task = Thread(target=run_provider, args=(provider, payload, method, request_time, timeout))
         task.start()
 
     total = float(available_providers)
 
     # Exit if all providers have returned results or timeout reached, check every 100ms
-    while time.time() - providers_time < timeout and available_providers > 0:
-        timer = time.time() - providers_time
+    while time.time() - request_time < timeout and available_providers > 0:
+        timer = time.time() - request_time
         log.debug("Timer: %ds / %ds" % (timer, timeout))
         if timer > timeout:
             break

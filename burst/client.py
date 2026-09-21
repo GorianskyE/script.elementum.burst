@@ -51,6 +51,9 @@ PATH_TEMP = translatePath("special://temp")
 FLARESOLVERR_DEFAULT_URL = "http://127.0.0.1:8191/v1"
 FLARESOLVERR_DEFAULT_TIMEOUT = 60
 
+# Seconds a single tracker request may take, used when the setting is empty.
+REQUEST_DEFAULT_TIMEOUT = 15
+
 # Cloudflare marks challenge responses with this header. Older versions of the
 # interstitial do not send it, so the body is checked for known markers as well.
 CLOUDFLARE_MITIGATED_HEADER = "Cf-Mitigated"
@@ -132,6 +135,11 @@ custom_dns_active = use_custom_dns and platform_can_resolve
 flaresolverr_enabled = get_setting("flaresolverr_enabled", bool)
 flaresolverr_url = get_setting("flaresolverr_url", unicode) or FLARESOLVERR_DEFAULT_URL
 flaresolverr_timeout = get_setting("flaresolverr_timeout", int) or FLARESOLVERR_DEFAULT_TIMEOUT
+
+# Without a timeout requests waits on a silent peer until the OS gives up, which
+# is far longer than a search is allowed to take: one stuck tracker then holds a
+# provider thread for the whole search.
+request_timeout = get_setting("request_timeout", int) or REQUEST_DEFAULT_TIMEOUT
 
 def FetchOpenNICDnsServers():
     try:
@@ -241,7 +249,10 @@ class Client:
         # Enabling retrying on failed requests
         retries = Retry(
             total=3,
-            read=2,
+            # A read timeout means the server took the connection and went quiet;
+            # trying the same slow request again only multiplies the stall, and the
+            # search has a budget to keep. Connecting is still worth retrying.
+            read=0,
             connect=2,
             redirect=3,
             backoff_factor=0.2,
@@ -564,7 +575,8 @@ class Client:
 
         try:
             self._good_spider()
-            with self.session.send(prepped, allow_redirects=allow_redirects) as response:
+            with self.session.send(prepped, allow_redirects=allow_redirects,
+                                   timeout=(min(10, request_timeout), request_timeout)) as response:
                 self.headers = response.headers
                 self.status = response.status_code
                 self.url = response.url

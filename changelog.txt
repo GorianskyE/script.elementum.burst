@@ -1,6 +1,12 @@
 script.elementum.burst changelog
 ===============
 
+[B]v0.0.99.10[/B] - 2026-09-21
+ - Tracker requests now time out instead of holding a provider thread until the
+   whole search is lost
+ - The search budget is counted from the start of the request, so results are
+   handed back before Elementum stops listening
+
 [B]v0.0.99.9[/B] - 2026-09-13
  - A provider definition can name its icon, so custom providers are no longer
    limited to one named after the provider id

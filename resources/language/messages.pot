@@ -518,3 +518,7 @@ msgstr ""
 msgctxt "#32176"
 msgid "FlareSolverr must be reachable from Kodi and use the same public IP address"
 msgstr ""
+
+msgctxt "#32177"
+msgid "Timeout for a single tracker request (seconds)"
+msgstr ""
