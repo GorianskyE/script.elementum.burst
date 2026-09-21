@@ -1,0 +1,43 @@
+# Jackett next to an existing FlareSolverr.
+#
+# Drop this file into a compose project that already runs FlareSolverr, as
+# "docker-compose.override.yml" beside its docker-compose.yml. Compose merges
+# override files automatically, so the existing docker-compose.yml stays
+# untouched and a later `git pull` in that checkout cannot conflict with it.
+# Jackett lands on the project network and reaches the solver as
+# http://flaresolverr:8191, so no second headless browser is started.
+#
+# Add to the project's .env:
+#   JACKETT_BIND=<private address to publish on, e.g. $(tailscale ip -4)>
+#   JACKETT_PORT=9117
+#
+# Verify the merge before starting anything:
+#   docker compose --project-directory <dir> config --services
+#
+# Sizing on a 1 GB VPS: Jackett settles around 120-200 MB. FlareSolverr sits at
+# ~100 MB idle but peaks near 300 MB while it solves, so the two together need
+# roughly 500 MB of head-room at the worst moment. mem_limit keeps .NET's heap
+# in check and, together with oom_score_adj, makes Jackett the first thing the
+# kernel reclaims - never the VPN next to it. Give the box 2 GB of swap.
+
+services:
+  jackett:
+    image: lscr.io/linuxserver/jackett:latest
+    container_name: tr-jackett
+    restart: unless-stopped
+    depends_on:
+      - flaresolverr
+    environment:
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      TZ: ${TZ:-Europe/Paris}
+      AUTO_UPDATE: "true"
+    volumes:
+      - ./jackett:/config
+    ports:
+      - "${JACKETT_BIND:-127.0.0.1}:${JACKETT_PORT:-9117}:9117"
+    mem_limit: ${JACKETT_MEM_LIMIT:-320m}
+    oom_score_adj: 600
+    logging:
+      driver: json-file
+      options: { max-size: "5m", max-file: "3" }

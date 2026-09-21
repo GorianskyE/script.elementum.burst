@@ -13,6 +13,7 @@ from elementum.provider import log, get_setting
 from .normalize import normalize_string, remove_accents
 from .providers.definitions import definitions
 from .utils import Magnet, get_int, get_float, clean_number, size_int, get_alias
+from .client import custom_dns_active
 if PY3:
     import html
     unicode = str
@@ -173,10 +174,10 @@ class Filtering:
             payload (dict): Elementum search payload
         """
         # Domain name preferred order:
-        # root_url -> base_url (see update_definitions()) -> public_dns_alias OR tor_dns_alias -> user defined alias
+        # root_url -> base_url (see update_definitions()) -> opennic_dns_alias OR tor_dns_alias -> user defined alias
         definition = definitions[provider]
-        if get_setting("use_public_dns", bool) and "public_dns_alias" in definition:
-            definition = get_alias(definition, definition["public_dns_alias"])
+        if custom_dns_active and get_setting("use_opennic_dns", bool) and "opennic_dns_alias" in definition:
+            definition = get_alias(definition, definition["opennic_dns_alias"])
         if get_setting("use_tor_dns", bool) and "tor_dns_alias" in definition:
             definition = get_alias(definition, definition["tor_dns_alias"])
         definition = get_alias(definition, get_setting("%s_alias" % provider))
@@ -196,10 +197,10 @@ class Filtering:
             payload (dict): Elementum search payload
         """
         # Domain name preferred order:
-        # root_url -> base_url (see update_definitions()) -> public_dns_alias OR tor_dns_alias -> user defined alias
+        # root_url -> base_url (see update_definitions()) -> opennic_dns_alias OR tor_dns_alias -> user defined alias
         definition = definitions[provider]
-        if get_setting("use_public_dns", bool) and "public_dns_alias" in definition:
-            definition = get_alias(definition, definition["public_dns_alias"])
+        if custom_dns_active and get_setting("use_opennic_dns", bool) and "opennic_dns_alias" in definition:
+            definition = get_alias(definition, definition["opennic_dns_alias"])
         if get_setting("use_tor_dns", bool) and "tor_dns_alias" in definition:
             definition = get_alias(definition, definition["tor_dns_alias"])
         definition = get_alias(definition, get_setting("%s_alias" % provider))
@@ -223,10 +224,10 @@ class Filtering:
             payload (dict): Elementum search payload
         """
         # Domain name preferred order:
-        # root_url -> base_url (see update_definitions()) -> public_dns_alias OR tor_dns_alias -> user defined alias
+        # root_url -> base_url (see update_definitions()) -> opennic_dns_alias OR tor_dns_alias -> user defined alias
         definition = definitions[provider]
-        if get_setting("use_public_dns", bool) and "public_dns_alias" in definition:
-            definition = get_alias(definition, definition["public_dns_alias"])
+        if custom_dns_active and get_setting("use_opennic_dns", bool) and "opennic_dns_alias" in definition:
+            definition = get_alias(definition, definition["opennic_dns_alias"])
         if get_setting("use_tor_dns", bool) and "tor_dns_alias" in definition:
             definition = get_alias(definition, definition["tor_dns_alias"])
         definition = get_alias(definition, get_setting("%s_alias" % provider))
@@ -250,10 +251,10 @@ class Filtering:
             payload (dict): Elementum search payload
         """
         # Domain name preferred order:
-        # root_url -> base_url (see update_definitions()) -> public_dns_alias OR tor_dns_alias -> user defined alias
+        # root_url -> base_url (see update_definitions()) -> opennic_dns_alias OR tor_dns_alias -> user defined alias
         definition = definitions[provider]
-        if get_setting("use_public_dns", bool) and "public_dns_alias" in definition:
-            definition = get_alias(definition, definition["public_dns_alias"])
+        if custom_dns_active and get_setting("use_opennic_dns", bool) and "opennic_dns_alias" in definition:
+            definition = get_alias(definition, definition["opennic_dns_alias"])
         if get_setting("use_tor_dns", bool) and "tor_dns_alias" in definition:
             definition = get_alias(definition, definition["tor_dns_alias"])
         definition = get_alias(definition, get_setting("%s_alias" % provider))
@@ -278,9 +279,9 @@ class Filtering:
         """
         definition = definitions[provider]
         # Domain name preferred order:
-        # root_url -> base_url (see update_definitions()) -> public_dns_alias OR tor_dns_alias -> user defined alias
-        if get_setting("use_public_dns", bool) and "public_dns_alias" in definition:
-            definition = get_alias(definition, definition["public_dns_alias"])
+        # root_url -> base_url (see update_definitions()) -> opennic_dns_alias OR tor_dns_alias -> user defined alias
+        if custom_dns_active and get_setting("use_opennic_dns", bool) and "opennic_dns_alias" in definition:
+            definition = get_alias(definition, definition["opennic_dns_alias"])
         if get_setting("use_tor_dns", bool) and "tor_dns_alias" in definition:
             definition = get_alias(definition, definition["tor_dns_alias"])
         definition = get_alias(definition, get_setting("%s_alias" % provider))
@@ -793,24 +794,41 @@ def cleanup_results(results_list):
             log.debug('[%s] Skipping due to empty uri: %s' % (result['provider'][16:-8], repr(result)))
             continue
 
-        hash_ = result['info_hash'].upper()
-
-        if not hash_:
+        def digest(value):
+            value = py2_encode(value)
             try:
-                if result['uri'] and result['uri'].startswith('magnet'):
-                    hash_ = Magnet(result['uri']).info_hash.upper()
-                else:
-                    hash_ = py2_encode(result['uri'].split("|")[0])
-                    try:
-                        hash_ = hash_.encode()
-                    except:
-                        pass
-                    hash_ = hashlib.md5(hash_).hexdigest()
+                value = value.encode()
+            except:
+                pass
+            return hashlib.md5(value).hexdigest()
+
+        # A result is a repeat of an earlier one if anything identifying it repeats.
+        keys = []
+        hash_ = (result['info_hash'] or '').upper()
+
+        if not hash_ and result['uri'].startswith('magnet'):
+            try:
+                hash_ = Magnet(result['uri']).info_hash.upper()
+            except:
+                pass
+
+        if hash_:
+            keys.append(hash_)
+        else:
+            try:
+                # The download URL, which is how this has always been done.
+                keys.append(digest(result['uri'].split("|")[0]))
+                # And what the release is, because a URL is not always stable:
+                # Jackett signs every /dl/ link separately, so the same release
+                # comes back under a different URL for each query a provider
+                # runs and would otherwise be listed once per query.
+                if result['name']:
+                    keys.append(digest("%s|%s" % (result['name'], result['size'])))
             except:
                 pass
 
         # Make sure all are upper-case and provider-scoped
-        hash_ = result['provider'] + hash_.upper()
+        keys = [result['provider'] + key.upper() for key in keys] or [result['provider']]
 
         # try:
         #     log.debug("[%s] Hash for %s: %s" % (result['provider'][16:-8], repr(result['name']), hash_))
@@ -819,9 +837,9 @@ def cleanup_results(results_list):
         #     log.warning("%s logging failed with: %s" % (result['provider'], repr(e)))
         #     map(log.debug, traceback.format_exc().split("\n"))
 
-        if not any(existing == hash_ for existing in hashes):
+        if not any(key in hashes for key in keys):
             filtered_list.append(result)
-            hashes.append(hash_)
+            hashes.extend(keys)
         else:
             log.debug('[%s] Skipping due to repeating hash: %s' % (result['provider'][16:-8], repr(result)))
 
