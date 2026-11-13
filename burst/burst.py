@@ -9,28 +9,29 @@ import json
 import time
 import requests
 import traceback
-from binascii import unhexlify
+from binascii import hexlify, unhexlify
 from threading import BoundedSemaphore, Event, Lock, Thread
 from elementum.provider import append_headers, get_setting, set_setting, log
 from queue import Queue
-from urllib.parse import urlparse, unquote
+from urllib.parse import urlparse, unquote, quote
 
 from .parser.ehp import Html
 import xbmc
+import xbmcaddon
 import xbmcgui
 
 try:
     from Cryptodome.Cipher import AES
-    from Cryptodome.Util.Padding import unpad
+    from Cryptodome.Util.Padding import pad, unpad
     hasCrypto = True
 except:
     hasCrypto = False
 
 from .provider import process
 from .providers.definitions import definitions, longest
-from .filtering import apply_filters, Filtering, cleanup_results
+from .filtering import apply_filters, Filtering, cleanup_results, language_priority
 from .client import Client, change_agent, elementum_addon
-from .utils import ADDON_ICON, notify, translation, sizeof, get_icon_path, get_enabled_providers, get_alias, size_int, domain_matches, clear_errors, get_errors
+from .utils import LANGUAGES, language_flags, ADDON_ICON, notify, translation, sizeof, get_icon_path, get_enabled_providers, get_alias, size_int, domain_matches, clear_errors, get_errors
 
 provider_names = []
 provider_results = []
@@ -40,8 +41,8 @@ request_time = time.time()
 results_lock = Lock()
 providers_done = Event()
 parser_code = {}
-# Concurrent subpage requests per provider, more only gets us rate limited
-SUBPAGE_THREADS = 10
+# Concurrent subpage requests per provider, browsers do not open more pages of one site at once and Cloudflare rate limits that
+SUBPAGE_THREADS = 4
 
 use_kodi_language = get_setting('kodi_language', bool)
 auto_timeout = get_setting("auto_timeout", bool)
@@ -54,10 +55,11 @@ cookie_sync_enabled = get_setting("cookie_sync_enabled", bool)
 cookie_sync_token = get_setting("cookie_sync_token", str)
 cookie_sync_password = get_setting("cookie_sync_password", str)
 cookie_sync_gist_id = get_setting("cookie_sync_gist_id", str)
-cookie_sync_filename = get_setting("cookie_sync_filename", str)
-cookie_sync_fileurl = get_setting("cookie_sync_fileurl", str)
-# Gist file content, if it came inline with the gist info, saves a request for the file itself
-cookie_sync_content = None
+cookie_sync_filename = get_setting("cookie_sync_filename", str) or "kevast-gist-default.json"
+# Parsed Gist file and its original cookies per domain, to push cookies changed by sites back
+cookie_sync_data = None
+cookie_sync_raw = {}
+GITHUB_CLIENT_ID = "Ov23liyj1e79CVhOqohm"
 
 special_chars = "()\"':.[]<>/\\?"
 
@@ -82,8 +84,10 @@ elif elementum_timeout > 0 and timeout > elementum_timeout - ELEMENTUM_MARGIN:
     log.info("Redefining timeout to be less than Elementum's: %d to %d seconds" % (timeout, elementum_timeout - ELEMENTUM_MARGIN))
     timeout = elementum_timeout - ELEMENTUM_MARGIN
 
-# Time when results are not needed anymore, set again for each search()
-search_deadline = time.time() + timeout
+# Seconds before the search timeout when subpage requests stop
+SUBPAGE_MARGIN = 2
+# Time when subpage results are not needed anymore, set again for each search()
+search_deadline = time.time() + timeout - SUBPAGE_MARGIN
 
 def search(payload, method="general"):
     """ Main search entrypoint
@@ -189,7 +193,8 @@ def search(payload, method="general"):
     # the setup above took is already gone from Elementum's own budget, and it is
     # Elementum that stops listening.
     providers_time = request_time
-    search_deadline = providers_time + timeout
+    # Stop subpages early, providers still need time to parse and report results before search() gives up on them
+    search_deadline = providers_time + timeout - SUBPAGE_MARGIN
 
     # Count all providers before starting any, so an early finished one can't bring the counter to zero
     available_providers = len(providers)
@@ -247,6 +252,7 @@ def search(payload, method="general"):
 
     log.info("Providers returned %d results in %s seconds" % (len(filtered_results), round(time.time() - request_time, 2)))
 
+    cookie_push()
     return filtered_results
 
 
@@ -342,14 +348,14 @@ def extract_torrents(provider, client):
                 log.debug(traceback.format_exc())
 
             # New client instance, otherwise it's race conditions all over the place
-            subclient = Client()
+            # Same info as the main client, so subpages use the same proxy from Elementum payload
+            subclient = Client(info=client.info)
             subclient.passkey = client.passkey
             headers = {}
 
             if "subpage_mode" in definition:
                 if definition["subpage_mode"] == "xhr":
                     headers['X-Requested-With'] = 'XMLHttpRequest'
-                    headers['Content-Language'] = ''
 
             if referer:
                 headers['Referer'] = referer
@@ -468,7 +474,7 @@ def extract_torrents(provider, client):
 
                     # Collect session cookies for current domain
                     for cookie in client._cookies:
-                        if domain_matches(cookie_domain, cookie.domain):
+                        if domain_matches(cookie_domain, cookie.domain) and not cookie.is_expired():
                             cookies[cookie.name] = cookie.value
 
                     headers = {'User-Agent': user_agent}
@@ -547,18 +553,18 @@ def extract_from_api(provider, client):
     if needs_subpage:
         subpage_slots = BoundedSemaphore(SUBPAGE_THREADS)
 
-        def resolve_subpage(q, name, info_hash, torrent, size, seeds, peers):
+        def resolve_subpage(q, name, info_hash, torrent, size, seeds, peers, source):
             resolved = torrent
             try:
                 # New client instance, otherwise it's race conditions all over the place
-                subclient = Client()
+                # Same info as the main client, so subpages use the same proxy from Elementum payload
+                subclient = Client(info=client.info)
                 subclient.passkey = client.passkey
                 headers = {}
 
                 if "subpage_mode" in definition:
                     if definition["subpage_mode"] == "xhr":
                         headers['X-Requested-With'] = 'XMLHttpRequest'
-                        headers['Content-Language'] = ''
 
                 with subpage_slots:
                     # Subpages still waiting for a slot when search is over would be thrown away anyway
@@ -584,15 +590,15 @@ def extract_from_api(provider, client):
                 log.debug(traceback.format_exc())
 
             provider_cache[torrent] = resolved
-            q.put_nowait((name, info_hash, resolved, size, seeds, peers))
+            q.put_nowait((name, info_hash, resolved, size, seeds, peers, source))
 
     def get_nested_value(result, key, default):
-        keys = key.split('.')
-        for key in keys:
-            if key in result:
+        # Dotted keys reach into nested objects, ie. 'attributes.name' in UNIT3D APIs
+        for key in key.split('.'):
+            if isinstance(result, dict) and key in result:
                 result = result[key]
             else:
-                result = default
+                return default
         return result
 
     results = []
@@ -623,6 +629,9 @@ def extract_from_api(provider, client):
         results = subresults
         log.debug("[%s] with subresults: %s" % (provider, repr(results)))
 
+    # Torrentio orders results by language priority but does not filter them
+    priority_flags = set(flag for lang in language_priority for flag in language_flags(lang)) if provider == 'torrentio' else set()
+
     for result in results:
         if not result or not isinstance(result, dict):
             continue
@@ -632,59 +641,76 @@ def extract_from_api(provider, client):
         size = ''
         seeds = ''
         peers = ''
+        source = ''
+        trackers = ''
 
         if provider == 'torrentio':
+            if priority_flags:
+                # Languages are flags in the last line of the title, Torrentio shows none for English-only releases
+                flags = set(re.findall('[\U0001F1E6-\U0001F1FF]{2}', result.get('title', '').split('\n')[-1])) or set(language_flags('en'))
+                if not flags & priority_flags:
+                    log.debug("[%s] Skipping result without priority languages: %s" % (provider, repr(result.get('title'))))
+                    continue
             title = result.get('title', '').encode('unicode-escape').decode('utf-8')
             match = re.search(r"\\U0001f464\s(\d+)", title)
             seeds = match.group(1) if match else ''
             match = re.search("\\b(\\d+(?:\\.\\d+)? [MG]B)\\b", title)
             size = match.group(1) if match else ''
+            # Tracker the torrent comes from, ie. '⚙️ RARBG'
+            match = re.search('\u2699\ufe0f?[ \t]*([^\n]+)', result.get('title', ''))
+            source = match.group(1).strip() if match else ''
+            # Magnet trackers come as 'tracker:<url>' in sources
+            trackers = ''.join('&tr=' + quote(s[8:], safe='') for s in result.get('sources') or [] if isinstance(s, str) and s.startswith('tracker:'))
 
         if 'name' in api_format:
-            name = get_nested_value(result, api_format['name'], "").replace('\n', ' ').replace('\r', '')
+            name = get_nested_value(result, api_format['name'], "")
+            if provider == 'torrentio':
+                # Lines after the torrent name are seeds, size, source and languages
+                name = name.split('\n')[0].strip()
+            name = name.replace('\n', ' ').replace('\r', '')
         if 'description' in api_format:
             if name:
                 name += ' '
             name += get_nested_value(result, api_format['description'], "")
         if 'torrent' in api_format:
-            torrent = result.get(api_format['torrent']) or ''
+            torrent = get_nested_value(result, api_format['torrent'], '') or ''
             if 'download_path' in definition and torrent:
-                torrent = definition['download_path'] + torrent
+                torrent = definition['download_path'] + torrent + trackers
             if client.token:
                 headers = {'Authorization': client.token, 'User-Agent': client.user_agent}
                 log.debug("[%s] Appending headers: %s" % (provider, repr(headers)))
                 torrent = append_headers(torrent, headers)
                 log.debug("[%s] Torrent with headers: %s" % (provider, repr(torrent)))
         if 'info_hash' in api_format:
-            info_hash = result.get(api_format['info_hash']) or ''
+            info_hash = get_nested_value(result, api_format['info_hash'], '') or ''
         if 'quality' in api_format:  # Again quite specific to YTS and AniLibria
             name = "%s - %s" % (name, get_nested_value(result, api_format['quality'], ""))
         if 'size' in api_format:
-            size = result.get(api_format['size'])
+            size = get_nested_value(result, api_format['size'], None)
             if isinstance(size, int):
                 size = sizeof(size)
             elif isinstance(size, str) and size.isdigit():
                 size = sizeof(int(size))
         if 'seeds' in api_format:
-            seeds = result.get(api_format['seeds'])
+            seeds = get_nested_value(result, api_format['seeds'], None)
             if isinstance(seeds, str) and seeds.isdigit():
                 seeds = int(seeds)
         if 'peers' in api_format:
-            peers = result.get(api_format['peers'])
+            peers = get_nested_value(result, api_format['peers'], None)
             if isinstance(peers, str) and peers.isdigit():
                 peers = int(peers)
 
         if needs_subpage and torrent and not torrent.startswith('magnet'):
             # Check if this url was previously requested, to avoid doing same job again.
             if torrent in provider_cache and provider_cache[torrent]:
-                yield (name, info_hash, provider_cache[torrent], size, seeds, peers)
+                yield (name, info_hash, provider_cache[torrent], size, seeds, peers, source)
                 continue
 
             threads.append(Thread(target=resolve_subpage,
-                                  args=(q, name, info_hash, torrent, size, seeds, peers)))
+                                  args=(q, name, info_hash, torrent, size, seeds, peers, source)))
             continue
 
-        yield (name, info_hash, torrent, size, seeds, peers)
+        yield (name, info_hash, torrent, size, seeds, peers, source)
 
     if needs_subpage:
         log.debug("[%s] Starting %d subpage threads..." % (provider, len(threads)))
@@ -845,6 +871,10 @@ def get_search_query(definition, key):
     return definition['parser'][key]
 
 def cookie_sync(is_silent):
+    global cookie_sync_data, cookie_sync_raw
+    cookie_sync_data = None
+    cookie_sync_raw = {}
+
     if not cookie_sync_enabled or not cookie_sync_token:
         return
 
@@ -852,47 +882,55 @@ def cookie_sync(is_silent):
         log.error("Cryptodome Python module is not available for current Kodi version")
         return
 
-    cookie_check_defaults()
-
     log.debug("Fetching cookies from Github")
 
     p_dialog = xbmcgui.DialogProgressBG()
     if not is_silent:
         p_dialog.create('Elementum [COLOR FFFF6B00]Burst[/COLOR]', translation(32166))
 
-    # Try to get url to a Gist's file first, if we have Gist ID
-    if not cookie_sync_gist_id or not cookie_fetch_fileurl():
-        # Try to get both Gist ID and Gist's file url
-        if not cookie_fetch_gist_id():
-            err = "Could not fetch gist id for cookie-sync"
-            log.error(err)
+    content = None
+    try:
+        if cookie_sync_gist_id:
+            content = cookie_gist_content(cookie_sync_gist_id)
+        if content is None:
+            # Gist ID is not set or the Gist is gone, use the most recently updated Gist with the cookies file
+            gists = cookie_list_gists()
+            if gists:
+                set_setting_if_changed('cookie_sync_gist_id', gists[0]["id"])
+                set_setting_if_changed('cookie_sync_info', gist_info(gists[0]))
+                content = cookie_gist_content(gists[0]["id"])
+    except Exception as e:
+        log.error("Gist fetch failed with: %s" % (repr(e)))
 
-            if not is_silent:
-                p_dialog.close()
-                notify(translation(32167) % (err), image=get_icon_path())
-            del p_dialog
+    if content is None:
+        err = "Could not fetch gist for cookie-sync"
+        log.error(err)
 
-            return
-
-    set_setting_if_changed('cookie_sync_gist_id', cookie_sync_gist_id)
-    set_setting_if_changed('cookie_sync_fileurl', cookie_sync_fileurl)
-
-    userAgent, cookies = cookie_fetch_file()
-    if userAgent:
-        set_setting_if_changed('cookie_sync_useragent', userAgent)
-        log.debug("Persisted user-agent for cookie-sync: %s" % (repr(userAgent)))
-        change_agent(userAgent)
-    if not cookies:
         if not is_silent:
             p_dialog.close()
+            notify(translation(32167) % (err), image=get_icon_path())
         del p_dialog
+
         return
 
     err = None
     try:
+        cookie_sync_data = json.loads(content)
+        userAgent, cookies, cookie_sync_raw = cookie_parse(cookie_sync_data)
+        if userAgent:
+            set_setting_if_changed('cookie_sync_useragent', userAgent)
+            log.debug("Persisted user-agent for cookie-sync: %s" % (repr(userAgent)))
+            change_agent(userAgent)
+
         log.debug("Adding %d cookies to http client" % (len(cookies)))
         client = Client()
         client._read_cookies()
+
+        # Drop local copies of synced cookies, whatever differs from the Gist after search was changed by sites
+        synced = set((cookie["domain"], cookie["name"], cookie["path"]) for cookie in cookies)
+        for c in list(client._cookies):
+            if any((k, c.name, c.path) in synced and domain_matches(c.domain.lstrip('.'), k) for k in cookie_sync_raw):
+                client._cookies.clear(c.domain, c.path, c.name)
 
         for cookie in cookies:
             client.add_cookie(cookie)
@@ -900,6 +938,8 @@ def cookie_sync(is_silent):
         client.save_cookies()
     except Exception as e:
         log.error("Failed adding cookies with: %s" % (repr(e)))
+        log.error(traceback.format_exc())
+        cookie_sync_raw = {}
         err = e
 
     if not is_silent:
@@ -908,125 +948,264 @@ def cookie_sync(is_silent):
             notify(translation(32167) % (err), image=get_icon_path())
     del p_dialog
 
+def cookie_push():
+    """ Puts cookies changed by sites back to the Gist, only for domains that came from the Gist """
+    if not cookie_sync_raw:
+        return
+
+    try:
+        client = Client()
+        client._read_cookies()
+
+        changed = []
+        for domain, raw in cookie_sync_raw.items():
+            fetched = dict(((c.get("name"), c.get("path")), c.get("value")) for c in raw)
+            known = dict(((c.get("name"), c.get("path")), c) for c in raw)
+            dirty = False
+            for c in client._cookies:
+                if not domain_matches(c.domain.lstrip('.'), domain) or c.value == fetched.get((c.name, c.path)):
+                    continue
+                cookie = known.get((c.name, c.path))
+                if cookie is None:
+                    cookie = known[(c.name, c.path)] = {"domain": c.domain, "name": c.name, "path": c.path, "secure": c.secure, "httpOnly": c.has_nonstandard_attr('HttpOnly'), "hostOnly": not c.domain.startswith('.'), "session": False}
+                    raw.append(cookie)
+                cookie["value"] = c.value
+                if c.expires:
+                    cookie["expirationDate"] = c.expires
+                dirty = True
+
+            if dirty:
+                data = json.dumps(raw)
+                cookie_sync_data[domain] = aes_encode(data) if cookie_sync_password else data
+                changed.append(domain)
+
+        if not changed:
+            return
+
+        log.info("Pushing changed cookies to Gist for: %s" % (", ".join(changed)))
+        gist_id = get_setting("cookie_sync_gist_id", str)
+        resp = requests.patch("https://api.github.com/gists/%s" % (gist_id), headers=github_headers(), json={"files": {cookie_sync_filename: {"content": json.dumps(cookie_sync_data)}}}, timeout=10)
+        if resp.status_code != 200:
+            log.error("Gist update failed with status %d: %s" % (resp.status_code, resp.text))
+    except Exception as e:
+        log.error("Cookie push failed with: %s" % (repr(e)))
+        log.debug(traceback.format_exc())
+
 def set_setting_if_changed(key, value):
     # Every set_setting() makes Kodi write the settings file
     if get_setting(key, str) != value:
         set_setting(key, value)
 
-def cookie_check_defaults():
-    global cookie_sync_filename
-    if not cookie_sync_filename:
-        cookie_sync_filename = "kevast-gist-default.json"
+def github_headers(token=None):
+    return {'Authorization': 'Bearer %s' % (token or cookie_sync_token), 'Accept': 'application/vnd.github+json'}
 
-def cookie_fetch_gist_id():
-    global cookie_sync_gist_id, cookie_sync_fileurl, cookie_sync_content
+def cookie_list_gists(token=None):
+    """ Returns Gists having the cookies file, most recently updated first """
+    gists = []
+    # Gists list is paginated, the first page alone misses the file for users with many gists
+    for page in range(1, 11):
+        resp = requests.get("https://api.github.com/gists", headers=github_headers(token), params={'per_page': 100, 'page': page}, timeout=10)
+        items = resp.json()
+        if not isinstance(items, list) or not items:
+            if resp.status_code != 200:
+                log.error("Gist list failed with status %d: %s" % (resp.status_code, resp.text))
+            break
+        gists.extend(item for item in items if any(v.get("filename") == cookie_sync_filename for v in item.get("files", {}).values()))
+    return sorted(gists, key=lambda g: g.get("updated_at", ""), reverse=True)
 
-    try:
-        url = "https://api.github.com/gists"
-        headers = {'Authorization': 'Bearer %s' % cookie_sync_token}
-        # Gists list is paginated, the first page alone misses the file for users with many gists
-        for page in range(1, 11):
-            resp = requests.get(url, headers=headers, params={'per_page': 100, 'page': page}, timeout=10)
-            resp_items = json.loads(resp.text)
-            if not isinstance(resp_items, list) or not resp_items:
-                break
+def cookie_gist_content(gist_id, token=None):
+    """ Returns content of the cookies file in the Gist, None if there is no such Gist or file """
+    resp = requests.get("https://api.github.com/gists/%s" % (gist_id), headers=github_headers(token), timeout=10)
+    if resp.status_code != 200:
+        log.error("Gist get failed with status %d: %s" % (resp.status_code, resp.text))
+        return None
+    for v in resp.json().get("files", {}).values():
+        if v.get("filename") != cookie_sync_filename:
+            continue
+        if v.get("content") and not v.get("truncated"):
+            return v["content"]
+        return requests.get(v["raw_url"], timeout=10).text
+    return None
 
-            for item in resp_items:
-                if "files" not in item or "id" not in item:
-                    continue
-                for k, v in item["files"].items():
-                    if "filename" not in v or v["filename"] != cookie_sync_filename:
-                        continue
-                    cookie_sync_gist_id = item["id"]
-                    cookie_sync_fileurl = v["raw_url"]
-                    cookie_sync_content = None  # Gists list does not include files content
+def cookie_parse(items):
+    """ Parses the cookies file
 
-                    return True
-    except Exception as e:
-        log.error("Gist list failed with: %s" % (repr(e)))
+    Returns:
+        tuple: User-agent, cookies for the cookie jar, original cookies per domain
+    """
+    domains_count = 0
+    cookies = []
+    raw = {}
+    expires = int(time.time()) + 1000 * 86400
 
-    return False
+    # Persisted user-agent can be stored as "__userAgent" or "userAgent", it's not a domain with cookies
+    userAgent = items.get("__userAgent") or items.get("userAgent")
+    if userAgent and cookie_sync_password:
+        userAgent = aes_decode(userAgent).decode('utf-8')
 
-def cookie_fetch_fileurl():
-    global cookie_sync_gist_id, cookie_sync_fileurl, cookie_sync_content
+    for k, v in items.items():
+        if k.startswith("__") or k == "userAgent":
+            continue
 
-    try:
-        url = "https://api.github.com/gists/%s" % (cookie_sync_gist_id)
-        headers = {'Authorization': 'Bearer %s' % cookie_sync_token}
-        resp = requests.get(url, headers=headers, timeout=10)
-        item = json.loads(resp.text)
+        domains_count = domains_count + 1
 
-        if "files" not in item or "id" not in item:
-            return False
-        for k, v in item["files"].items():
-            if "filename" not in v or v["filename"] != cookie_sync_filename:
-                continue
-            cookie_sync_gist_id = item["id"]
-            cookie_sync_fileurl = v["raw_url"]
-            cookie_sync_content = v["content"] if v.get("content") and not v.get("truncated") else None
-
-            return True
-    except Exception as e:
-        log.error("Gist get failed with: %s" % (repr(e)))
-
-    return False
-
-def cookie_fetch_file():
-    try:
-        domains_count = 0
-        cookies_count = 0
-
-        cookies = []
-
-        if cookie_sync_content:
-            resp_items = json.loads(cookie_sync_content)
-        else:
-            resp = requests.get(cookie_sync_fileurl, timeout=10)
-            resp_items = json.loads(resp.text)
-
-        expires = int(time.time()) + 1000 * 86400
-
-        # Persisted user-agent can be stored as "__userAgent" or "userAgent", it's not a domain with cookies
-        userAgent = resp_items.get("__userAgent") or resp_items.get("userAgent")
-        if userAgent and cookie_sync_password:
-            userAgent = aes_decode(userAgent).decode('utf-8')
-
-        for k, v in resp_items.items():
-            if k.startswith("__") or k == "userAgent":
-                continue
-
-            domains_count = domains_count + 1
-
+        # Loop through and force cookies into cookie jar
+        try:
             # Decode data if encrypted
             if cookie_sync_password:
                 v = aes_decode(v)
+            raw[k] = json.loads(v)
 
-            # Loop through and force cookies into cookie jar
-            try:
-                for cookie in json.loads(v):
-                    cookie["domain"] = k
+            for cookie in raw[k]:
+                # Copy, originals are pushed back to the Gist with their own fields
+                cookie = dict(cookie, domain=k)
 
-                    if "expirationDate" not in cookie or not cookie["expirationDate"]:
-                        cookie["expirationDate"] = expires
-                    else:
-                        cookie["expirationDate"] = int(cookie["expirationDate"])
-                        if cookie["expirationDate"] <= time.time():
-                            log.debug("Skipping expired cookie %s for %s" % (cookie.get("name"), k))
-                            continue
-                    cookie["rest"] = {'HttpOnly': cookie.get("httpOnly", False)}
+                if "expirationDate" not in cookie or not cookie["expirationDate"]:
+                    cookie["expirationDate"] = expires
+                else:
+                    cookie["expirationDate"] = int(cookie["expirationDate"])
+                    if cookie["expirationDate"] <= time.time():
+                        log.warning("Skipping expired cookie %s for %s, re-sync cookies in the browser to use it" % (cookie.get("name"), k))
+                        continue
+                cookie["rest"] = {'HttpOnly': cookie.get("httpOnly", False)}
 
-                    cookies.append(cookie)
-                    cookies_count = cookies_count + 1
-            except Exception as e:
-                log.error("Failed parsing cookies for %s with: %s" % (k, repr(e)))
-                log.error(traceback.format_exc())
-        log.debug("Cookie sync fetched for %d domains, %d cookies" % (domains_count, cookies_count))
-        return userAgent, cookies
+                cookies.append(cookie)
+        except Exception as e:
+            log.error("Failed parsing cookies for %s with: %s" % (k, repr(e)))
+            log.error(traceback.format_exc())
+    log.debug("Cookie sync fetched for %d domains, %d cookies" % (domains_count, len(cookies)))
+    return userAgent, cookies, raw
+
+def github_device_auth():
+    """ Authorizes in GitHub with OAuth device flow, user enters the code on any other device
+
+    Returns:
+        str: Access token, None if cancelled
+    """
+    if not GITHUB_CLIENT_ID:
+        raise Exception("GitHub Client ID is not configured")
+
+    accept = {'Accept': 'application/json'}
+    code = requests.post("https://github.com/login/device/code", data={'client_id': GITHUB_CLIENT_ID, 'scope': 'gist'}, headers=accept, timeout=10).json()
+    if 'device_code' not in code:
+        raise Exception(code.get('error_description') or code.get('error') or repr(code))
+
+    interval = int(code.get('interval', 5))
+    lifetime = int(code.get('expires_in', 900))
+    expires_at = time.time() + lifetime
+    message = translation(32172) % (code['verification_uri'], code['user_code'])
+
+    p_dialog = xbmcgui.DialogProgress()
+    p_dialog.create('Elementum [COLOR FFFF6B00]Burst[/COLOR]', message)
+    monitor = xbmc.Monitor()
+    try:
+        while time.time() < expires_at:
+            # Wait in short steps, so Cancel reacts at once
+            for _ in range(interval * 4):
+                if p_dialog.iscanceled() or monitor.waitForAbort(0.25):
+                    return None
+            p_dialog.update(int((expires_at - time.time()) * 100 / lifetime), message)
+
+            token = requests.post("https://github.com/login/oauth/access_token", data={'client_id': GITHUB_CLIENT_ID, 'device_code': code['device_code'], 'grant_type': 'urn:ietf:params:oauth:grant-type:device_code'}, headers=accept, timeout=10).json()
+            if token.get('access_token'):
+                return token['access_token']
+            error = token.get('error')
+            if error == 'slow_down':
+                interval = int(token.get('interval', interval + 5))
+            elif error != 'authorization_pending':
+                raise Exception(token.get('error_description') or error)
+    finally:
+        p_dialog.close()
+
+    raise Exception("Device code expired")
+
+def gist_info(gist, count=None):
+    """ Gist description for the read-only Settings field """
+    info = "%s (%s)" % (gist.get("description") or gist["id"], gist["id"])
+    return "%s, %s" % (info, count) if count else info
+
+def cookie_sync_setup():
+    """ Settings wizard: authorizes in GitHub and selects the Gist to sync cookies with """
+    run_settings_action(cookie_sync_setup_steps)
+
+def cookie_sync_select():
+    """ Settings action: selects another Gist, authorizes first if there is no token yet """
+    run_settings_action(cookie_select_gist if cookie_sync_token else cookie_sync_setup_steps)
+
+def run_settings_action(steps):
+    """ Runs a Settings action, the dialog is closed while it runs and opened again after """
+    try:
+        steps()
     except Exception as e:
-        log.error("Gist file download failed with: %s" % (repr(e)))
-        log.error(traceback.format_exc())
+        log.error("Cookie sync setup failed with: %s" % (repr(e)))
+        log.debug(traceback.format_exc())
+        notify(translation(32167) % (e), image=get_icon_path())
+    finally:
+        # Settings dialog was closed to run the wizard, otherwise it overwrites settings we have set
+        xbmcaddon.Addon().openSettings()
 
-    return None, None
+def select_languages():
+    """ Settings action: selects languages to prioritize in {languages} keywords, all or none checked means no priority """
+    run_settings_action(select_languages_steps)
+
+def select_languages_steps():
+    # 'kodi' stands for the current Kodi language, resolved at search time
+    codes = ['kodi'] + list(LANGUAGES)
+    labels = ["%s (%s)" % (translation(32180), xbmc.getLanguage(xbmc.ISO_639_1))] + ["%s (%s)" % (LANGUAGES[code].capitalize(), code) for code in LANGUAGES]
+    current = get_setting('language_priority', str).split(',')
+    preselect = [i for i, code in enumerate(codes) if 'all' in current or code in current]
+    index = xbmcgui.Dialog().multiselect(translation(32178), labels, preselect=preselect)
+    if index is None:
+        return
+    set_setting('language_priority', ','.join(codes[i] for i in index) if 0 < len(index) < len(codes) else 'all')
+
+def cookie_sync_setup_steps():
+    global cookie_sync_token
+    token = github_device_auth()
+    if not token:
+        return
+
+    resp = requests.get("https://api.github.com/user", headers=github_headers(token), timeout=10)
+    if resp.status_code != 200:
+        raise Exception("GitHub user request failed with status %d" % (resp.status_code))
+    login = resp.json().get("login", "")
+
+    # Gist of another account is not reachable with the new token
+    if login != get_setting("cookie_sync_user", str):
+        set_setting('cookie_sync_gist_id', '')
+        set_setting('cookie_sync_info', '')
+    set_setting('cookie_sync_token', token)
+    set_setting('cookie_sync_user', login)
+    cookie_sync_token = token
+
+    cookie_select_gist()
+
+def cookie_select_gist():
+    gists = cookie_list_gists()
+    if not gists:
+        # The Gist is picked up automatically once the browser extension creates it
+        notify(translation(32174) % (cookie_sync_filename), image=get_icon_path())
+        return
+
+    items = []
+    counts = []
+    for gist in gists:
+        try:
+            _, cookies, raw = cookie_parse(json.loads(cookie_gist_content(gist["id"])))
+            count = translation(32175) % (len(cookies), len(raw))
+        except Exception as e:
+            log.error("Failed reading gist %s with: %s" % (gist["id"], repr(e)))
+            count = "?"
+        updated = gist.get("updated_at", "").replace("T", " ")[:16]
+        items.append(xbmcgui.ListItem(label=gist.get("description") or gist["id"], label2="ID: %s | %s | %s" % (gist["id"], count, updated)))
+        counts.append(count)
+
+    index = xbmcgui.Dialog().select(translation(32173), items, preselect=0, useDetails=True)
+    if index < 0:
+        return
+
+    set_setting('cookie_sync_gist_id', gists[index]["id"])
+    set_setting('cookie_sync_info', gist_info(gists[index], counts[index]))
 
 def EVP_BytesToKey(password, salt, key_len, iv_len):
     """
@@ -1039,6 +1218,12 @@ def EVP_BytesToKey(password, salt, key_len, iv_len):
         d.append(md5(d[-1] + password + salt).digest())
         dtot += d[-1]
     return dtot[:key_len], dtot[key_len:key_len+iv_len]
+
+def aes_encode(data):
+    key, iv = EVP_BytesToKey(cookie_sync_password.encode('utf-8'), b'', 16, 16)
+
+    aes = AES.new(key, AES.MODE_CBC, IV=iv)
+    return hexlify(aes.encrypt(pad(data.encode('utf-8'), AES.block_size))).decode('ascii')
 
 def aes_decode(data):
     key, iv = EVP_BytesToKey(cookie_sync_password.encode('utf-8'), b'', 16, 16)

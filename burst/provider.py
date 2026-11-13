@@ -41,7 +41,8 @@ def generate_payload(provider, generator, filtering, verify_name=True, verify_si
     icon_name = definition['icon'] if 'icon' in definition and definition['icon'] else provider
     icon_path = os.path.join(ADDON_PATH, 'burst', 'providers', 'icons', '%s.png' % icon_name)
 
-    for name, info_hash, uri, size, seeds, peers in generator:
+    # Generators can yield the source of the torrent, ie. the tracker an aggregator like Torrentio got it from
+    for name, info_hash, uri, size, seeds, peers, *source in generator:
         size = clean_size(size)
         # uri, info_hash = clean_magnet(uri, info_hash)
         v_name = name if verify_name else filtering.title
@@ -59,7 +60,7 @@ def generate_payload(provider, generator, filtering, verify_name=True, verify_si
                 "seeds": sort_seeds,
                 "peers": get_int(peers),
                 "language": definition["language"] if 'language' in definition else 'en',
-                "provider": '[COLOR %s]%s[/COLOR]' % (definition['color'], definition['name']),
+                "provider": '[COLOR %s]%s[/COLOR]' % (definition['color'], "%s (%s)" % (definition['name'], source[0]) if source and source[0] else definition['name']),
                 "icon": icon_path,
                 "sort_resolution": sort_resolution,
                 "sort_balance": sort_balance
@@ -107,6 +108,9 @@ def process(provider, generator, filtering, has_special, verify_name=True, verif
     log.debug("[%s] Queries: %s" % (provider, filtering.queries))
     log.debug("[%s] Extras:  %s" % (provider, filtering.extras))
 
+    # Keywords can be in the URL too, ie. {languages:long} in Torrentio options
+    base_url = filtering.process_keywords(provider, filtering.url, definition) if '{' in filtering.url else filtering.url
+
     last_priority = 1
     for query, extra, priority in zip(filtering.queries, filtering.extras, filtering.queries_priorities):
         log.debug("[%s] Before keywords - Query: %s - Extra: %s - Priority: %d" % (provider, repr(query), repr(extra), priority))
@@ -149,7 +153,7 @@ def process(provider, generator, filtering, has_special, verify_name=True, verif
         if not query:
             return filtering.results
 
-        url_search = filtering.url.replace('QUERY', query)
+        url_search = base_url.replace('QUERY', query)
         url_search = url_search.replace('EXTRA', extra)
 
         url_search = url_search.replace(' ', definition['separator'])

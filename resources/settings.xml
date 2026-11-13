@@ -21,6 +21,8 @@
     <setting label="32034" id="max_size" type="slider" option="float" range="1,0.25,500" default="100" />
     <setting label="32040" id="max_results" type="slider" default="10" option="int" range="1,1,25" />
     <setting label="32119" id="sort_by" type="enum" lvalues="32120|32121|32122|32123" default="3" />
+    <setting label="32178" type="action" option="close" action="RunScript(script.elementum.burst, select_languages)" />
+    <setting label="32179" id="language_priority" type="text" enable="false" default="kodi" />
 
     <setting label="32162" type="lsep" />
     <setting label="32124" id="auto_timeout" type="bool" default="true" />
@@ -36,11 +38,15 @@
   <category label="32151">
     <setting label="32152" id="cookie_sync_enabled" type="bool" default="true" />
 
-    <setting label="32153" id="cookie_sync_token" type="text" enable="eq(-1,true)" />
-    <setting label="32154" id="cookie_sync_password" type="text" enable="eq(-2,true)" />
-    <setting label="32155" id="cookie_sync_gist_id" type="text" enable="eq(-3,true)" />
-    <setting label="32156" id="cookie_sync_filename" type="text" enable="eq(-4,true)" default="kevast-gist-default.json" />
-    <setting label="32157" id="cookie_sync_fileurl" type="text" enable="eq(-5,true)" default="" />
+    <setting label="32154" id="cookie_sync_password" type="text" enable="eq(-1,true)" />
+    <setting label="32156" id="cookie_sync_filename" type="text" enable="eq(-2,true)" default="kevast-gist-default.json" />
+    <setting label="32153" type="action" option="close" action="RunScript(script.elementum.burst, cookie_sync_setup)" enable="eq(-3,true)" />
+    <setting label="32176" id="cookie_sync_user" type="text" enable="false" default="" />
+    <setting label="32177" type="action" option="close" action="RunScript(script.elementum.burst, cookie_sync_select)" enable="eq(-5,true)" />
+    <setting label="32155" id="cookie_sync_info" type="text" enable="false" default="" />
+    <setting id="cookie_sync_token" type="text" visible="false" default="" />
+    <setting id="cookie_sync_gist_id" type="text" visible="false" default="" />
+    <setting id="cookie_sync_useragent" type="text" visible="false" default="" />
   </category>
 
   <!-- Providers -->
@@ -310,6 +316,12 @@
       <setting id="rutracker_alias" label="32077" type="text" default="" subsetting="true" visible="eq(-3,true)" />
       <setting id="rutracker_contains" type="enum" label="32080" subsetting="true" lvalues="32081|32082|32083" visible="eq(-4,true)" />
 
+    <setting label="[B]Seedpool[/B]   [COLOR gray][$ADDON[script.elementum.burst 32111]][/COLOR]" id="use_seedpool" type="bool" default="false" />
+      <setting id="seedpool_username" label="32015" type="text" default="" subsetting="true" visible="eq(-1,true)" />
+      <setting id="seedpool_passkey" label="32076" type="text" default="" option="hidden" subsetting="true" visible="eq(-2,true)" />
+      <setting id="seedpool_alias" label="32077" type="text" default="" subsetting="true" visible="eq(-3,true)" />
+      <setting id="seedpool_contains" type="enum" label="32080" subsetting="true" lvalues="32081|32082|32083" visible="eq(-4,true)" />
+
     <setting label="[B]Torrent.lt[/B]   [COLOR gray][$ADDON[script.elementum.burst 32127]][/COLOR]" id="use_torrentlt" type="bool" default="false" />
       <setting id="torrentlt_username" label="32015" type="text" default="" subsetting="true" visible="eq(-1,true)" />
       <setting id="torrentlt_password" label="32016" type="text" default="" option="hidden" subsetting="true" visible="eq(-2,true)" />
@@ -374,6 +386,7 @@
     <setting label="32090" id="require_keywords" type="bool" default="true" />
     <setting label="32091" id="require_release_type" type="bool" default="true" />
     <setting label="32092" id="require_size" type="bool" default="true" />
+    <setting label="32181" id="require_episode" type="bool" default="false" />
     <setting label="32078" id="allow_noseeds" type="bool" default="false" />
   </category>
 

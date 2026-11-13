@@ -1,6 +1,67 @@
 script.elementum.burst changelog
 ===============
 
+[B]v0.0.102.1[/B] - 2026-11-14
+ - Merged upstream v0.0.101 and v0.0.102
+ - Sub-page resolving for API providers (Jackett) uses the same proxy as the
+   search and keeps the torrent source shown next to the provider name
+ - Sub-pages stop shortly before the search budget, which is still counted
+   from the start of the request
+
+[B]v0.0.102[/B] - 2026-11-06
+ - New "Season and episode" filtering setting, off by default: episode
+   and season searches skip results for other seasons or episodes, ie.
+   S02E05 or S04 when searching for S02E09. Season packs and ranges
+   that include the episode are kept (#503). Thanks to @sjq42.
+ - Add Seedpool private provider, searched with the account passkey
+   (#502). Thanks to @mozibwxhkabgpb.
+ - API providers can read torrent, info hash, size, seeds and peers
+   from nested fields, and a result without such a field no longer
+   drops all results of the search (#502). Thanks to @mozibwxhkabgpb.
+ - RuTracker: fixed peers count.
+ - Cookie sync: log in to GitHub with a code entered on any device,
+   instead of creating a token by hand. Only access to Gists is asked.
+ - Cookie sync: select the Gist to use, with its ID, number of cookies
+   and update time. The most recently updated Gist is preselected.
+ - Cookie sync: Settings show the GitHub user and the active Gist, and
+   another Gist can be selected at any time.
+ - Cookie sync: cookies changed by trackers during search are saved
+   back to the Gist, so other devices always get the latest cookies.
+ - Cookies set by trackers during search are kept for next searches.
+ - Subpage requests use the same proxy as the search.
+ - With Elementum internal proxy enabled, all requests go through it,
+   also when Burst proxy settings are enabled, so Cloudflare cookies
+   from cookie sync keep working.
+ - Cookie sync: the browser User-Agent is kept between runs, so synced
+   cookies work even when the Gist could not be fetched.
+ - Requests send the same headers as a browser opening a page.
+ - Rate limited (429) and Cloudflare challenged (503) requests are not
+   retried right away, and at most 4 pages of one tracker are opened at
+   once, so Cloudflare does not block searches for too many requests.
+ - Log says when a tracker answers with a Cloudflare challenge, so
+   cookies can be refreshed in the browser.
+ - New Language priority setting, Kodi language by default, to get
+   results in preferred languages first.
+ - New {languages:short} and {languages:long} keywords for provider
+   queries and URLs, ie. "en,ru" or "english,russian".
+ - Torrentio: results come by language priority, and results without
+   any of the preferred languages are skipped.
+ - Torrentio: provider name shows where the torrent comes from, ie.
+   "Torrentio (RARBG)", and magnet links include its trackers.
+ - Torrentio: torrent names no longer include seeds, size and
+   languages, and movie search is fixed.
+
+[B]v0.0.101[/B] - 2026-11-01
+ - Version 0.0.101
+ - Expired cookies are no longer used for searches and torrent
+   downloads, a warning asks to re-sync cookies in the browser.
+ - Subpage requests stop shortly before the search timeout, so
+   providers still report their results in time.
+ - Fixed parsing of numbers like "5.0" or "1.2K", that were glued into
+   one number.
+ - Fixed peers count for RuTracker.
+ - Translations moved to standard Kodi language folders.
+
 [B]v0.0.100.1[/B] - 2026-10-30
  - Merged upstream v0.0.100
  - Kinozal keeps the kinozal.me domain

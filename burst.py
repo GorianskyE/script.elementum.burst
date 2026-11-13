@@ -4,7 +4,7 @@ import os
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'resources', 'site-packages'))
 
-from burst.burst import search
+from burst.burst import search, cookie_sync_setup, cookie_sync_select, select_languages
 from elementum.provider import register, log
 from burst.client import Client
 
@@ -34,5 +34,11 @@ if len(sys.argv) >= 2:
 
 if action and 'clear_cookies' in action:
     clear_cookies()
+elif action and 'cookie_sync_setup' in action:
+    cookie_sync_setup()
+elif action and 'cookie_sync_select' in action:
+    cookie_sync_select()
+elif action and 'select_languages' in action:
+    select_languages()
 else:
     register(search, search_movie, search_episode, search_season)
